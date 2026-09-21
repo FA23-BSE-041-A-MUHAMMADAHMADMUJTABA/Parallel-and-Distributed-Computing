@@ -1,0 +1,164 @@
+================================================================================
+LAB 02: SOCKET PROGRAMMING - VARIABLE LENGTH MESSAGE (WITH ZFILL)
+WORKING EXPLANATION (ROMAN URDU)
+================================================================================
+
+Yeh document Lab 02 k modified code ki mukammal working step-by-step samjhata hai.
+Is lab mai client aur server k darmiyan variable length message (jiski lambai
+badal sakti hai) transfer karne ka system banaya gaya hai.
+
+--------------------------------------------------------------------------------
+1. FILES KA STRUCTURE AUR UNKA MAQSAD
+--------------------------------------------------------------------------------
+Folder: D:\github2\Parallel-and-Distributed-Computing\lab2\
+
+Is folder mai darj zail files hain:
+1. TCPserver.py (ya server.py):
+   Server program jo client ka connection accept karta hai, pehle 3 characters
+   se message ki length nikalta hai, aur fir utnay hi characters ka pura message
+   read karta hai.
+
+2. TCPclient.py (ya client.py):
+   Client program jo message ki length nikalta hai, zfill(3) se 3 digits ka
+   header banata hai, message k shuru mai jodta hai aur server ko bhejta hai.
+
+3. Standalone Task Files (University Task Breakdown):
+   - task1_client_length_padding.py: Sirf Task 1 (Length aur zfill padding).
+   - task2_client_prep_msg.py: Task 1 + Task 2 (Header ko message k sath jodna).
+   - task3_client_send.py: Task 3 (Client ka message bhejny ka script).
+   - task4_server_receive.py: Task 4 (Server ka length extract aur read krna).
+
+4. working_roman_urdu.txt: Yeh file (Code ki step-by-step working).
+5. concept_roman_urdu.txt: Conceptual explanation (Kiya aur kyu ho raha hai).
+
+
+--------------------------------------------------------------------------------
+2. STEP-BY-STEP WORKING - CLIENT SIDE (Task 1, Task 2, Task 3)
+--------------------------------------------------------------------------------
+Client program (TCPclient.py) mai ye steps hotay hain:
+
+Step 1: Socket Creation aur Connection
+- Client `socket.socket(socket.AF_INET, socket.SOCK_STREAM)` banata hai.
+  AF_INET ka matlab IPv4 address hai aur SOCK_STREAM ka matlab TCP protocol hai.
+- `s.connect(('127.0.0.1', 8888))` k zariye client local machine par chalne
+  walay server se connect ho jata hai.
+
+Step 2 [TASK 1]: Length Maloom Karna aur zfill() se Pad Karna
+- User se koi bhi message lia jata hai, maslan:
+  message = "Hello Server! How are you?"
+- Python k `len(message)` function se iski length L nikali jati hai.
+  Yahan length = 26 characters.
+- Requirement k mutabiq maximum length 255 ho sakti hai (jo k 3 digits hoti hai).
+- Is length ko 3 digits ka banane k liye `zfill(3)` method use kiya jata hai:
+  L_padded = str(L).zfill(3)
+  * Agar length 5 ho  -> ban jayega '005'
+  * Agar length 26 ho -> ban jayega '026'
+  * Agar length 200 ho-> ban jayega '200'
+
+Step 3 [TASK 2]: Length (L) ko Message k Shuru Mai Lagana
+- Ab is 3-digit padded string ko message k start mai concatenate (jod) dia jata hai:
+  full_message = L_padded + message
+  Example:
+  full_message = "026Hello Server! How are you?"
+  Is mai pehle 3 characters ('026') header hain, aur aglay 26 characters asal message hain.
+
+Step 4 [TASK 3]: Server ko Message Bhejna
+- `s.sendall(full_message.encode('utf-8'))` call kiya jata hai.
+- String ko pehle UTF-8 bytes mai convert (encode) kiya jata hai kyun k network
+  socket sirf raw bytes transfer karta hai.
+- Message server tak chala jata hai.
+- Uske baad client `recvall(s, 16)` se server ka reply ("BYE BYE CLIENT..") receive
+  karta hai aur connection close kar deta hai.
+
+
+--------------------------------------------------------------------------------
+3. STEP-BY-STEP WORKING - SERVER SIDE (Task 4)
+--------------------------------------------------------------------------------
+Server program (TCPserver.py) mai ye steps hotay hain:
+
+Step 1: Socket Bind aur Listen
+- Server socket banata hai: `socket.socket(socket.AF_INET, socket.SOCK_STREAM)`
+- `s.bind(('127.0.0.1', 8888))` se socket ko IP aur PORT 8888 k sath jora jata hai.
+- `s.listen(1)` se server incoming requests k liye listening mode mai chala jata hai.
+
+Step 2: Client Connection Accept Karna
+- `sc, sockname = s.accept()` call hoti hai.
+- Server yahan ruk kar client ka intezar karta hai.
+- Jaise hi client connect hota hai, server ko ek naya connected socket `sc` milta hai.
+
+Step 3 [TASK 4 - Part A]: Pehle 3 Characters (Length Header) Extract Karna
+- Server janta hai k protocol k mutabiq shuru k 3 characters length hain!
+- Is liye server call karta hai:
+  header_bytes = recvall(sc, 3)
+  length_str = header_bytes.decode('utf-8')  # e.g., '026'
+  msg_length = int(length_str)              # string se integer ban gaya: 26
+- Server ko ab 100% exact maloom ho chuka hai k aane wala message kitne characters ka hai!
+
+Step 4 [TASK 4 - Part B]: Rest of Message Read Karna
+- Ab server dobara `recvall()` ko call karta hai, lekin is dafa exact `msg_length` pass karta hai:
+  message_bytes = recvall(sc, msg_length)
+  message = message_bytes.decode('utf-8')
+- Server k paas bina kisi cut ya extra data k pura message "Hello Server! How are you?"
+  pahunch jata hai.
+
+Step 5: Reply Send Karna aur Close Karna
+- Server client ko response bhejta hai: `sc.sendall(b'BYE BYE CLIENT..')`
+- Socket close karta hai: `sc.close()`
+- Server aglay client ka wait karne k liye loop k zariye wapis `accept()` par chala jata hai.
+
+
+--------------------------------------------------------------------------------
+4. RECVALL FUNCTION KI WORKING
+--------------------------------------------------------------------------------
+Dono programs mai ek helper function hai:
+```python
+def recvall(sock, length):
+    data = b''
+    while len(data) < length:
+        more = sock.recv(length - len(data))
+        if not more:
+            raise EOFError(...)
+        data += more
+    return data
+```
+Kyun zaroori hai?
+TCP ek continuous stream hai. Agar hum `sock.recv(length)` sirf ek dafa likhen, to
+ho sakta hai network slow hone ki waja se aadha data abhi aaya ho aur aadha baad mai.
+`recvall` loop chala kar tab tak data receive karta rehta hai jab tak pure `length`
+bytes receive na ho jayen.
+
+
+--------------------------------------------------------------------------------
+5. CODE KO RUN KARNE KA TAREEQA (HOW TO RUN)
+--------------------------------------------------------------------------------
+Apne computer par do alag alag terminals (PowerShell ya CMD) open karein:
+
+TERMINAL 1 (Pehle Server Chalayein):
+  cd D:\github2\Parallel-and-Distributed-Computing\lab2
+  python TCPserver.py
+
+  Output aayega:
+  Server listening at ('127.0.0.1', 8888)...
+
+TERMINAL 2 (Fir Client Chalayein):
+  cd D:\github2\Parallel-and-Distributed-Computing\lab2
+  python TCPclient.py
+
+  Aap se message poocha jayega. Aap koi bhi message likh sakte hain:
+  Enter message to send: Parallel computing lab task completed!
+
+  Output aayega:
+  Original message: 'Parallel computing lab task completed!'
+  [Task 1] Message length L = 39. Padded with zfill(3): '039'
+  [Task 2] Full formatted message with prefix: '039Parallel computing lab task completed!'
+  [Task 3] Sent 42 bytes (3 bytes header + 39 bytes body) to server.
+  THE SERVER SAID: 'BYE BYE CLIENT..'
+
+TERMINAL 1 (Server par output show hoga):
+  We have accepted a connection from ('127.0.0.1', 54321)
+  [Task 4] Extracted 3-digit length header: 039 -> Length is 39 characters
+  [Task 4] The incoming message (39 octets/chars) says: 'Parallel computing lab task completed!'
+  Reply sent, socket closed.
+
+Is tarah Task 1, Task 2, Task 3 aur Task 4 kamyabi se execute ho jate hain!
+================================================================================
