@@ -15,7 +15,7 @@ def recvall(sock, length):
     while len(data) < length:
         more = sock.recv(length - len(data))
         if not more:
-            raise EOFError(f'Socket closed with {len(data)} bytes received out of {length} expected bytes')
+            raise EOFError('Socket closed unexpectedly')
         data += more
     return data
 
@@ -24,13 +24,12 @@ def task3_send():
     s.connect((HOST, PORT))
     print(f"[Client] Connected to server at {(HOST, PORT)}")
 
-    # Prompt user or use default
     if len(sys.argv) > 1:
         raw_msg = " ".join(sys.argv[1:])
     else:
         raw_msg = "Hello Server from Task 3! This is a test message of custom length."
 
-    # Task 1: Determine length and pad with zfill(3)
+    # Task 1: Determine length & pad with zfill(3)
     L = len(raw_msg)
     L_padded = str(L).zfill(3)
 
@@ -45,10 +44,8 @@ def task3_send():
     s.sendall(framed_msg.encode('utf-8'))
     print(f"[Task 3] Successfully sent framed message ({len(framed_msg)} bytes) to server.")
 
-    # Receive server response
     reply = recvall(s, 16)
     print(f"[Client] Server replied: {repr(reply.decode('utf-8'))}")
-
     s.close()
     print("[Client] Connection closed.")
 

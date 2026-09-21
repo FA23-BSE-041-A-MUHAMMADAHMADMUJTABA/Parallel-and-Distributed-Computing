@@ -10,12 +10,11 @@ HOST = '127.0.0.1'
 PORT = 8888
 
 def recvall(sock, length):
-    """Reliably read exactly 'length' bytes from TCP stream."""
     data = b''
     while len(data) < length:
         more = sock.recv(length - len(data))
         if not more:
-            raise EOFError(f'Socket closed with {len(data)} bytes received out of {length} expected bytes')
+            raise EOFError('Socket closed unexpectedly')
         data += more
     return data
 
@@ -31,28 +30,21 @@ def task4_server():
             conn, addr = s.accept()
             print(f"\n[Task 4 Server] Connection accepted from: {addr}")
 
-            # -------------------------------------------------------------
-            # Task 4 - Step 1: Extract length of message (first 3 characters)
-            # -------------------------------------------------------------
+            # Step 1: Extract length of message (first 3 characters)
             header = recvall(conn, 3).decode('utf-8')
             message_length = int(header)
-            print(f"[Task 4] Step 1 -> Extracted length header (first 3 chars): '{header}'")
-            print(f"[Task 4] Step 1 -> Parsed message length: {message_length} characters")
+            print(f"[Task 4] Extracted 3-digit length header: '{header}' -> Length = {message_length} characters")
 
-            # -------------------------------------------------------------
-            # Task 4 - Step 2: Read the rest of message with proper length
-            # -------------------------------------------------------------
+            # Step 2: Read rest of message with proper length
             body = recvall(conn, message_length).decode('utf-8')
-            print(f"[Task 4] Step 2 -> Read rest of message with length {message_length}:")
-            print(f"         Message Content: {repr(body)}")
+            print(f"[Task 4] Read message body: {repr(body)}")
 
-            # Reply to client
             conn.sendall(b'BYE BYE CLIENT..')
             conn.close()
-            print("[Task 4 Server] Reply sent, client connection closed.")
+            print("[Task 4 Server] Reply sent, socket closed.")
 
         except KeyboardInterrupt:
-            print("\n[Task 4 Server] Shutting down server.")
+            print("\n[Task 4 Server] Server stopped.")
             break
         except Exception as e:
             print(f"[Task 4 Server] Error: {e}")

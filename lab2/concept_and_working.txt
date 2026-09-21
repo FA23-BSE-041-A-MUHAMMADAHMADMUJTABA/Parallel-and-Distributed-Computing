@@ -1,0 +1,418 @@
+================================================================================
+CSC-334: PARALLEL AND DISTRIBUTED COMPUTING - LAB 02
+DETAILED CONCEPT & WORKING GUIDE (SOCKET PROGRAMMING WITH ZFILL FRAMING)
+================================================================================
+Student Name    : Muhammad Ahmad Mujtaba
+Registration No : FA23-BSE-041
+Class & Section : BSE 7A (Software Engineering)
+Course          : CSC-334 Parallel and Distributed Computing
+Lab Title       : Lab 02 - Socket Programming: Variable Length Message Framing
+================================================================================
+
+Yeh document Lab 02 k tamam CONCEPTS aur CODE KI WORKING ko Roman Urdu aur
+technical detail k sath asan feham tareeqay se explain karta hai.
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS (FEHRIST)
+--------------------------------------------------------------------------------
+PART 1: DETAILED CONCEPT (CONCEPT KI MUKAMMAL TAFSEEL)
+  1. Socket Programming Kiya Hai?
+  2. TCP Protocol ka "Byte Stream" Nature (Asal Waja)
+  3. Pehle Walay Code mai 16-Character Limitation ka Masla
+  4. Message Framing Kiya Hai aur Yeh Kyu Zaroori Hai?
+  5. Length-Prefix Framing Architecture (Header + Payload)
+  6. zfill() Method aur 3 Digits ka Asal Maqsad
+  7. Real-World Applications (HTTP, Databases, Streaming)
+
+PART 2: STEP-BY-STEP WORKING (CODE KI LINE-BY-LINE WORKING)
+  8. Client Side Working (Tasks 1, 2, aur 3)
+  9. Server Side Working (Task 4: Do-Marhala Reception)
+  10. recvall() Function ki Working aur Stream Handling
+  11. Socket Lifecycle aur State Transitions
+
+PART 3: HOW TO RUN & VERIFICATION TRACE
+  12. Code Run Karne ka Tareeqa (Terminal Commands)
+  13. Test Cases aur Wire Trace (Sent vs Received)
+  14. Khulasa (Final Summary)
+
+
+================================================================================
+PART 1: DETAILED CONCEPT (CONCEPT KI MUKAMMAL TAFSEEL)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. SOCKET PROGRAMMING KIYA HAI?
+--------------------------------------------------------------------------------
+Distributed Computing mai mukhtalif machines (computers) ya ek hi machine par
+chalne walay mukhtalif processes (programs) aapas mai data exchange karte hain.
+Is communication ko possible banane k liye "Sockets" ka istemal hota hai.
+
+- Socket asal mai Operating System (OS) ka ek software endpoint (darwaza) hai
+  jo application layer ko network hardware (NIC) k sath jodta hai.
+- Network par kisi bhi process ko identify karne k liye 2 cheezein chahiye hoti hain:
+    a) IP Address  : Host Machine ka pata (e.g., 127.0.0.1 for localhost).
+    b) Port Number : Machine k andar chalne walay specific application ka number
+                     (e.g., 8888), taake OS ko pata chale k aane wala data kis
+                     program ko forward karna hai.
+
+Client-Server Model:
+- Server: Ek passive process jo ek specific IP aur Port par connection ka wait
+  (listen) karta hai.
+- Client: Ek active process jo server k IP aur Port par connection request bhejta
+  hai (3-way handshake initiate karta hai).
+
+
+--------------------------------------------------------------------------------
+2. TCP PROTOCOL KA "BYTE STREAM" NATURE (ASAL WAJA)
+--------------------------------------------------------------------------------
+TCP (SOCK_STREAM) ek "Connection-Oriented" aur "Byte Stream" protocol hai.
+Yahan "Byte Stream" ko samajhna sab se ahem point hai:
+
+- Byte Stream ka matlab hai paani ka nalka ya continuous pipeline!
+  Jab client socket mai data daalta hai, to TCP us data ko ek continuous dharay
+  (stream of individual bytes) ki tarah network par flow karwata hai.
+- TCP k andar "Message Boundaries" NAHI hotin!
+  TCP ko yeh nahi pata hota k client ne 1 jumla bheja hai ya 5 jumlay. TCP sirf
+  itna janta hai k bytes travel kar rahi hain.
+- Nateeja: Agar client do alag alag bar data bheje:
+    Bar 1: "Hello"
+    Bar 2: "World"
+  To server jab read karega, to ho sakta hai usay dono mil kar "HelloWorld" ek sath
+  mil jayen, ya "Hel" pehle mile aur "loWorld" baad mai mile.
+- Is streaming behavior ki waja se Application Layer par developer ki
+  zimmadari hoti hai k wo khud bataye k message kahan shuru ho raha hai aur
+  kahan khatam ho raha hai! Is process ko "Message Framing" kehte hain.
+
+
+--------------------------------------------------------------------------------
+3. PEHLE WALAY CODE MAI 16-CHARACTER LIMITATION KA MASLA
+--------------------------------------------------------------------------------
+Lab manual mai jo basic program tha, usmai yeh restriction thi:
+  message = recvall(sc, 16)
+
+Iska matlab tha k server har haal mai theek 16 characters (octets / bytes) read
+karna chahta tha. Is se do baray maslay (problems) paida hotay the:
+
+MASLA 1: Chhota Message (Underflow / Deadlock / EOFError)
+- Agar client ne sirf 5 characters bheje (maslan "Hello"):
+- Server 16 bytes read karne k liye wait karega. 5 bytes milne k baad wo baqi 11
+  bytes k liye socket par "BLOCK" ho jayega (hang ho jayega).
+- Client samajh raha hai k message chala gaya aur wo reply ka intezar karega.
+- Dono taraf deadlock ho jata hai! Aakhir me jab connection close hota hai to
+  server par crash ho kar "EOFError: socket closed 5 bytes into 16-byte message"
+  aa jata tha!
+
+MASLA 2: Bara Message (Overflow / Truncation / Data Loss)
+- Agar client ne 50 characters ka message bheja:
+- Server sirf pehle 16 characters uthayega.
+- Baqi k 34 characters socket buffer mai phanse reh jayenge ya zaya ho jayenge.
+  Message cut (truncate) ho jata tha.
+
+Is limitation ko khatam karne k liye hume "Variable Length Message Framing" ki
+zaroorat thi!
+
+
+--------------------------------------------------------------------------------
+4. MESSAGE FRAMING KIYA HAI AUR YEH KYU ZAROORI HAI?
+--------------------------------------------------------------------------------
+Message Framing ka matlab hai: TCP byte stream k andar apne data ki hudood
+(boundaries) define karna, taake receiver ko saaf pata chale k ek complete
+message kahan shuru hota hai aur kahan khatam hota hai.
+
+Dunya mai Framing k 2 standard tareeqay hain:
+A) Delimiter Framing:
+   Har message k aakhir mai koi special character laga dena jaise '\n' (newline).
+   Lekin masla yeh hai k agar message k andar hi user ne Enter ('\n') press kar
+   diya to packet beech me hi toot jata hai.
+B) Length-Prefix Framing (Header Protocol):
+   Message bhejne se pehle message k shuru mai bata do k aage aane wala payload
+   kitne bytes ka hai!
+   Hamari Lab 02 mai yahi modern aur reliable approach implement ki gayi hai.
+
+
+--------------------------------------------------------------------------------
+5. LENGTH-PREFIX FRAMING ARCHITECTURE (HEADER + PAYLOAD)
+--------------------------------------------------------------------------------
+Hamara application packet do hisson par mushtamil hota hai:
+
+  +-------------------------+----------------------------------------------+
+  |  HEADER (Padded Length) |           PAYLOAD (Actual Message)           |
+  |     Exact 3 Bytes       |               Variable Length                |
+  +-------------------------+----------------------------------------------+
+
+Misal:
+- Client ka message : "Hello Server! How are you?" (Length = 26 characters)
+- Header            : "026" (3 characters)
+- Wire par jo packet jayega: "026Hello Server! How are you?"
+
+Server ka Kaam:
+- Server janta hai k protocol k mutabiq shuru k EXACT 3 BYTES header hain.
+- Pehle server sirf 3 bytes read karta hai -> "026".
+- Phir usay pata chal jata hai k agla payload theek 26 bytes ka hai.
+- Ab server theek 26 bytes mazeed read karta hai -> Pura message safely mil jata hai!
+
+
+--------------------------------------------------------------------------------
+6. zfill() METHOD AUR 3 DIGITS KA ASAL MAQSAD
+--------------------------------------------------------------------------------
+Aksar students puchte hain: "zfill() kyu use kiya aur 3 digits hi kyu rakhe?"
+
+1. 3 Digits Kyun?
+   Task mai condition thi: "Assume max. number of length is 255 i.e. 3 digits".
+   Chunkay message ki maximum length 255 ho sakti hai, aur 255 aik 3-digit number
+   hai (digits: 2, 5, 5). Iska matlab 1 se le kar 255 tak koi bhi length ho,
+   wo zyada se zyada 3 digits mai fit aa jayegi.
+
+2. zfill() Kiya Karta Hai?
+   `zfill()` Python ka built-in method hai jo string k left side par zero (0)
+   laga kar uski length ko fixed kar deta hai:
+     str(5).zfill(3)   => "005"
+     str(66).zfill(3)  => "066"
+     str(150).zfill(3) => "150"
+
+3. Fixed-Size Header ka Faida:
+   Agar hum zfill use na karte:
+   - Length 5 bhejte: 1 character ka header.
+   - Length 45 bhejte: 2 characters ka header.
+   - Length 200 bhejte: 3 characters ka header.
+   Server ko pehle se kaise pata chalta k header 1 digit ka hai ya 3 digits ka?
+   zfill() ki waja se HEADER KA SIZE HAMESHA FIXED (EXACT 3 BYTES) HO GAYA!
+   Is waja se server bina kisi confusion k pehle round mai hamesha theek 3 bytes
+   read karta hai.
+
+
+--------------------------------------------------------------------------------
+7. REAL-WORLD APPLICATIONS (INTERNET PAR YEH KAHAN USE HOTA HAI?)
+--------------------------------------------------------------------------------
+Yeh concept computer networking ka core pillar hai:
+1. HTTP Protocol (Web Browsers):
+   Jab aap browser se koi web page mangwate hain, to web server HTTP headers mai
+   ek line bhejta hai:
+     Content-Length: 4580
+   Browser pehle Content-Length parhta hai aur fir theek 4580 bytes ki HTML body
+   download karta hai. Hamara 3-digit header bilkul HTTP Content-Length ki tarah hai!
+2. TLS / HTTPS Encryption:
+   Encrypted packets k shuru mai TLS header 2 bytes ki packet length rakhta hai.
+3. Database Network Protocols (MySQL / PostgreSQL):
+   Python client jab MySQL se query result mangwata hai to database har packet
+   k shuru me 3-byte length header bhejta hai.
+
+
+================================================================================
+PART 2: STEP-BY-STEP WORKING (CODE KI LINE-BY-LINE WORKING)
+================================================================================
+
+--------------------------------------------------------------------------------
+8. CLIENT SIDE WORKING (TCPclient.py)
+--------------------------------------------------------------------------------
+Client script darj zail 5 steps mai execute hota hai:
+
+Step 1: Socket Creation aur Connection
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.connect(('127.0.0.1', 8888))
+- AF_INET ka matlab IPv4 addressing hai.
+- SOCK_STREAM ka matlab TCP protocol hai.
+- `connect()` OS ko kehta hai k Server k IP aur Port 8888 k sath 3-way handshake
+  kare aur connection establish kare.
+
+Step 2 [TASK 1]: Length L Calculate Karna aur zfill(3) se Pad Karna
+  raw_msg = "Hello Server! This message has 66 characters and exceeds 16 octets!"
+  L = len(raw_msg)           # L = 66
+  if L > 255:
+      raise ValueError("Message exceeds 255 characters limit!")
+  L_padded = str(L).zfill(3) # "066"
+- Python `len()` se message k characters count karta hai.
+- `str(L).zfill(3)` usay string bana kar 3 digits mai convert karta hai ("066").
+
+Step 3 [TASK 2]: Length Header ko Message k Shuru Mai Attach Karna
+  full_message = L_padded + raw_msg
+- String concatenation se header aur message jud jate hain:
+  "066Hello Server! This message has 66 characters and exceeds 16 octets!"
+
+Step 4 [TASK 3]: Socket par Transmit Karna
+  s.sendall(full_message.encode('utf-8'))
+- Sockets sirf raw bytes transfer karti hain, is liye `.encode('utf-8')` se
+  string ko UTF-8 bytes mai convert kiya jata hai.
+- `sendall()` guarantee karta hai k socket buffer mai pure bytes push ho jayen.
+
+Step 5: Server ka Response Receive Karna aur Close Karna
+  reply = recvall(s, 16)
+  print('THE SERVER SAID:', repr(reply.decode('utf-8')))
+  s.close()
+- Client server ki taraf se acknowledgment reply receive karta hai aur socket
+  close kar deta hai.
+
+
+--------------------------------------------------------------------------------
+9. SERVER SIDE WORKING (TCPserver.py)
+--------------------------------------------------------------------------------
+Server script incoming connections listen karta hai aur DO-MARHALA RECEPTION
+(2-step reception) perform karta hai:
+
+Step 1: Socket Setup (Passive Listener)
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  s.bind(('127.0.0.1', 8888))
+  s.listen(1)
+- `SO_REUSEADDR`: Taake agar program dobara chalaya jaye to "Address already in use"
+  ka error na aaye.
+- `bind()`: Socket ko Local IP aur Port 8888 k sath lock kar deta hai.
+- `listen(1)`: Server ko Passive state mai daal deta hai.
+
+Step 2: Incoming Connection Accept Karna
+  sc, sockname = s.accept()
+- Server is line par BLOCK ho kar client connection ka intezar karta hai.
+- Jaise hi client connect hota hai, accept() return karta hai:
+    sc       : Naya active socket descriptor jo sirf is client se baat karega.
+    sockname : Client ka IP aur ephemeral port (e.g. ('127.0.0.1', 53218)).
+
+Step 3 [TASK 4 - Part A]: Pehle 3 Characters (Length Header) Extract Karna
+  header_bytes = recvall(sc, 3)
+  header_str = header_bytes.decode('utf-8') # "066"
+  msg_length = int(header_str)              # 66 (Integer)
+- Server janta hai k shuru k 3 characters length hain.
+- Server socket se theek 3 bytes mangwata hai.
+- String "066" ko integer `66` mai convert kar leta hai. Ab server ko maloom hai
+  k aage theek 66 bytes aane walay hain!
+
+Step 4 [TASK 4 - Part B]: Rest of Message Read Karna
+  payload_bytes = recvall(sc, msg_length)
+  payload = payload_bytes.decode('utf-8')
+- Server dobara `recvall()` call karta hai, lekin is dafa exact `msg_length` pass
+  karta hai.
+- Server k paas bina kisi cut ya buffer overflow k pura message pohanch jata hai!
+
+Step 5: Reply Send Karna aur Close Karna
+  sc.sendall(b'BYE BYE CLIENT..')
+  sc.close()
+- Server client ko confirmation bhejta hai aur connection close kar k aglay
+  client k intezar k liye loop k zariye wapis `accept()` par chala jata hai.
+
+
+--------------------------------------------------------------------------------
+10. recvall() FUNCTION KI WORKING AUR STREAM HANDLING
+--------------------------------------------------------------------------------
+Dono programs mai yeh function mojood hai:
+
+def recvall(sock, length):
+    data = b''
+    while len(data) < length:
+        more = sock.recv(length - len(data))
+        if not more:
+            raise EOFError(f'Socket closed with {len(data)} bytes received out of {length}')
+        data += more
+    return data
+
+Kyun Zaroori Hai?
+- Standard `sock.recv(1024)` sirf available bytes uthata hai. Agar network
+  slow ho ya data fragmented ho kar aaye to ho sakta hai 66 bytes mai se pehle
+  sirf 20 bytes milein.
+- Agar hum `recv()` ko sirf ek dafa call karein to aadha message miss ho sakta hai!
+- `recvall` function ek `while` loop chalata hai aur tab tak socket se `recv()`
+  karta rehta hai jab tak pure `length` bytes jama na ho jayen.
+- Agar beech mai connection toot jaye to `if not more` check kar k clean error
+  throw karta hai.
+
+
+--------------------------------------------------------------------------------
+11. SOCKET LIFECYCLE AUR STATE TRANSITIONS
+--------------------------------------------------------------------------------
+Client aur Server k darmiyan state transitions ka flow chart:
+
+      SERVER                               CLIENT
+      ------                               ------
+   socket()                             socket()
+      |                                    |
+    bind()                                 |
+      |                                    |
+   listen() (PASSIVE State)                |
+      |                                    |
+   accept() [BLOCKS / WAITS]               |
+      |                                    |
+      | <==== TCP 3-Way Handshake ===== connect() (ACTIVE State)
+      |                                    |
+  [sc created]                             |
+      |                                    |
+  recvall(sc, 3)                           | [Task 1: len & zfill(3)]
+   [Extracts L]                            | [Task 2: L + msg]
+      | <==== "066Hello Server!..." ===== sendall() [Task 3]
+  recvall(sc, L)                           |
+   [Reads payload]                         |
+      |                                    |
+  sendall(b'BYE...') ===================> recvall(s, 16)
+      |                                    |
+    close()                              close()
+
+
+================================================================================
+PART 3: HOW TO RUN & VERIFICATION TRACE
+================================================================================
+
+--------------------------------------------------------------------------------
+12. CODE RUN KARNE KA TAREEQA (TERMINAL COMMANDS)
+--------------------------------------------------------------------------------
+Apne system mai 2 alag alag terminals (PowerShell / Command Prompt) open karein:
+
+STEP 1: Terminal 1 mai Server Start Karein
+  cd D:\github2\Parallel-and-Distributed-Computing\lab2
+  python TCPserver.py
+
+  Server output show karega:
+  Server listening at ('127.0.0.1', 8888)...
+  (Server yahan ruk kar client ka intezar karega)
+
+STEP 2: Terminal 2 mai Client Run Karein
+  cd D:\github2\Parallel-and-Distributed-Computing\lab2
+  python TCPclient.py
+
+  Agar custom message dena ho:
+  python TCPclient.py "Yeh mera custom test message hai jo 16 chars se bara hai!"
+
+
+--------------------------------------------------------------------------------
+13. TEST CASES AUR WIRE TRACE (SENT VS RECEIVED)
+--------------------------------------------------------------------------------
+
+TEST CASE 1: Short Message (Length < 16)
+- Message : "Hi Server" (Length = 9)
+- zfill(3): "009"
+- On Wire : "009Hi Server"
+- Server  : Pehle 3 bytes read kiye -> "009" (length 9). Aglay 9 bytes read kiye -> "Hi Server".
+- Result  : Success! Koi block ya hang nahi hua.
+
+TEST CASE 2: Exact 16-Character Message
+- Message : "16-char message!" (Length = 16)
+- zfill(3): "016"
+- On Wire : "01616-char message!"
+- Server  : Pehle 3 bytes read kiye -> "016" (length 16). Aglay 16 bytes read kiye -> "16-char message!".
+- Result  : Success!
+
+TEST CASE 3: Long Message (Length > 16)
+- Message : "Hello Server! This message has 66 characters and exceeds 16 octets!" (Length = 66)
+- zfill(3): "066"
+- On Wire : "066Hello Server! This message has 66 characters and exceeds 16 octets!"
+- Server  : Pehle 3 bytes read kiye -> "066" (length 66). Aglay 66 bytes read kiye -> Pura message!
+- Result  : Success! Zero data loss aur zero truncation.
+
+
+--------------------------------------------------------------------------------
+14. KHULASA (FINAL SUMMARY)
+--------------------------------------------------------------------------------
+1. Socket programming network communication k liye OS ka API endpoint hai.
+2. TCP ek continuous stream of bytes hai jisme packets ki boundary nahi hoti.
+3. Pehle fixed 16 characters ki limitation thi jis se messages truncate ho jate
+   the ya server hang ho jata tha.
+4. Humne "Length-Prefix Framing" implement ki.
+5. Client side par:
+   - Message ki length L calculate ki.
+   - `zfill(3)` se us length ko 3 digits banaya (e.g. 66 -> "066").
+   - Message k shuru me header lagaya aur `sendall()` se bheja.
+6. Server side par:
+   - Pehle round mai theek 3 bytes parh kar length extract ki.
+   - Dusre round mai theek utnay hi bytes ka payload read kiya.
+7. Is tarah 1 se 255 characters ka koi bhi message bina kisi error ya cut k
+   kamyabi se communicate ho jata hai!
+
+================================================================================
+END OF DOCUMENT
+================================================================================
