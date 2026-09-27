@@ -1,0 +1,390 @@
+================================================================================
+CSC-334: PARALLEL AND DISTRIBUTED COMPUTING - LAB 03
+DETAILED CODE WORKING GUIDE (MULTI-THREADED TCP SERVER & CLIENT)
+================================================================================
+Student Name    : Muhammad Ahmad Mujtaba
+Registration No : FA23-BSE-041
+Class & Section : BSE 7A (Software Engineering)
+Course          : CSC-334 Parallel and Distributed Computing
+Lab Title       : Lab 03 - Socket Programming with Multi-Threading
+================================================================================
+
+Yeh document Lab 03 k dono scripts (`server.py` aur `client.py`) ki MUKAMMAL
+WORKING ko line-by-line, execution flow, thread synchronization aur terminal
+run karne k tareeqay k sath Roman Urdu aur English technical detail mai explain
+karta hai.
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS (FEHRIST)
+--------------------------------------------------------------------------------
+PART 1: SERVER SCRIPT WORKING (`server.py`)
+  1. Imports aur Network Configuration
+  2. Thread Locks aur Shared State Initialization
+  3. safe_print() Function (acquire & release ka Istemal)
+  4. handle_client() Worker Function ka Step-by-Step Flow
+  5. start_server() Main Listener Loop aur Thread Spawning
+
+PART 2: CLIENT SCRIPT WORKING (`client.py`)
+  6. Client Initialization aur Server Connection
+  7. Continuous Interactive Message Loop
+  8. Termination Handling ('exit' / 'quit') aur Graceful Shutdown
+
+PART 3: THREAD SYNCHRONIZATION (LOCKS KA ASAL ROLE)
+  9. Terminal Print Synchronization (print_lock)
+  10. Client State Tracking (state_lock)
+
+PART 4: HOW TO RUN & VERIFICATION (TERMINAL COMMANDS & TRACE)
+  11. Multi-Terminal Execution Steps
+  12. Simultaneous Clients Live Trace & Output Breakdown
+
+
+================================================================================
+PART 1: SERVER SCRIPT WORKING (`server.py`)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. IMPORTS AUR NETWORK CONFIGURATION
+--------------------------------------------------------------------------------
+Code Lines:
+  import socket
+  import threading
+  import sys
+  import time
+
+  HOST = '127.0.0.1'  # Localhost (Same machine)
+  PORT = 8888         # Port number jis par server listen karega
+  BUFFER_SIZE = 1024  # Max bytes jo ek waqt mai recv kiye jayenge
+
+Explanation:
+- `socket`: Network communication k liye OS sockets provide karta hai.
+- `threading`: Naye worker threads banane (`threading.Thread`) aur locks (`threading.Lock`)
+  k liye istemal hota hai.
+- `sys` & `time`: Console output flushing aur real-time timestamps k liye.
+- `HOST` & `PORT`: Server ka unique address. 127.0.0.1 loopback address hai aur
+  8888 ek unreserved port hai.
+
+
+--------------------------------------------------------------------------------
+2. THREAD LOCKS AUR SHARED STATE INITIALIZATION
+--------------------------------------------------------------------------------
+Code Lines:
+  print_lock = threading.Lock()
+  state_lock = threading.Lock()
+
+  connected_clients = {}
+  client_counter = 0
+
+Explanation:
+- `print_lock`: Jab multiple threads ek hi waqt mai screen par print karte hain,
+  to unka text mix ho sakta hai. Yeh lock ek waqt mai sirf ek thread ko print
+  karne deta hai.
+- `state_lock`: `connected_clients` dictionary aur `client_counter` ko race
+  condition se bachata hai.
+- `connected_clients`: Is dictionary mai har active client ka ID, IP, Port aur
+  assigned Thread Name store rehta hai.
+
+
+--------------------------------------------------------------------------------
+3. safe_print() FUNCTION (ACQUIRE & RELEASE KA ISTEMAL)
+--------------------------------------------------------------------------------
+Code Lines:
+  def safe_print(*args, **kwargs):
+      print_lock.acquire()
+      try:
+          print(*args, **kwargs)
+          sys.stdout.flush()
+      finally:
+          print_lock.release()
+
+Explanation:
+- Lab instruction ki requirement: "Lock (acquire() aur release()) ka istemal karein."
+- Step 1 (`acquire()`): Pehle thread terminal screen par print karne ka exclusive right
+  hasil karta hai. Agar koi doosra thread pehle se print kar raha hai, to yeh thread
+  wait karta hai.
+- Step 2 (`try` block): Message terminal par display hota hai aur `flush()` se buffer
+  foran clear hota hai.
+- Step 3 (`finally` block & `release()`): Kaam mukammal hote hi lock foran release
+  ho jata hai taake agla thread print kar sake. `finally` block ensure karta hai k
+  agar koi error bhi aaye, to lock hamesha release ho aur program deadlock na ho.
+
+
+--------------------------------------------------------------------------------
+4. handle_client() WORKER FUNCTION KA STEP-BY-STEP FLOW
+--------------------------------------------------------------------------------
+Yeh function har client k liye ek naye alag thread k andar run hota hai.
+
+Step 4a: Thread aur Client Details Extract Karna:
+  current_thread = threading.current_thread()
+  thread_name = current_thread.name
+  client_ip, client_port = client_address
+
+  - `current_thread.name`: OS scheduler is thread ko jo naam deta hai (e.g. "ClientThread-1-Port56616").
+  - `client_address`: Client ka IP aur Port number.
+
+Step 4b: Shared State mai Client Register Karna (with state_lock):
+  state_lock.acquire()
+  try:
+      connected_clients[client_id] = {...}
+      total_active_clients = len(connected_clients)
+  finally:
+      state_lock.release()
+
+  - `state_lock.acquire()` karke dictionary mai entry add hoti hai aur
+    `release()` se lock free hota hai.
+  - Safe_print k zariye terminal par print hota hai:
+    * Active Thread Name
+    * Client IP
+    * Client Port Number
+    * Total Active Threads count (`threading.active_count()`)
+
+Step 4c: Initial Welcome Banner Bhejna:
+  client_socket.sendall(welcome_msg.encode('utf-8'))
+  - Client ko ek welcome message bheja jata hai jis mai uska assigned thread name
+    aur client id hoti hai.
+
+Step 4d: Continuous Message Exchange Loop (`while True:`):
+  - `raw_data = client_socket.recv(BUFFER_SIZE)`:
+    Yeh call sirf is specific client k thread ko block karti hai. Main thread
+    ya baqi clients k threads bilkul block nahi hotay!
+  - Disconnect Check (`if not raw_data:`):
+    Agar client ne terminal close kar diya, to loop break ho jata hai.
+  - Exit Command Check (`client_message.lower() in ['exit', 'quit', 'bye']`):
+    Agar user ne 'exit' ya 'quit' type kiya:
+    1. Server client ko farewell message bhejta hai.
+    2. Loop break ho jata hai.
+  - Normal Message Reply (ACK):
+    Agar normal message aaya, to server usko terminal par thread name aur client IP
+    k sath print karta hai aur client ko ACK message return karta hai:
+    `"Server ACK [Thread: ... | Client #...]: Received '...'"`
+
+Step 4e: Connection Cleanup aur Thread Termination:
+  finally:
+      client_socket.close()
+      state_lock.acquire()
+      try:
+          del connected_clients[client_id]
+          remaining_clients = len(connected_clients)
+      finally:
+          state_lock.release()
+      safe_print(...)
+
+  - Socket ko close kiya jata hai.
+  - `state_lock.acquire()` karke dictionary se client delete hota hai aur lock
+    release hota hai.
+  - Terminal par thread termination ka banner show hota hai:
+    * Disconnected Thread Name
+    * Remaining Active Clients
+    * Total Living Threads
+
+
+--------------------------------------------------------------------------------
+5. start_server() MAIN LISTENER LOOP AUR THREAD SPAWNING
+--------------------------------------------------------------------------------
+Code Lines:
+  server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  server_socket.bind((HOST, PORT))
+  server_socket.listen(10)
+
+Explanation:
+- `socket.AF_INET`: IPv4 address family.
+- `socket.SOCK_STREAM`: TCP protocol.
+- `SO_REUSEADDR`: Taake agar server restart karein to "Address already in use" ka error na aaye.
+- `server_socket.listen(10)`: Server incoming connections k liye listening state mai chala jata hai.
+
+The Accept & Thread Spawning Loop:
+  while True:
+      client_socket, client_address = server_socket.accept()
+      
+      state_lock.acquire()
+      try:
+          client_counter += 1
+          assigned_id = client_counter
+      finally:
+          state_lock.release()
+
+      thread_name = f"ClientThread-{assigned_id}-Port{client_address[1]}"
+      client_thread = threading.Thread(
+          target=handle_client,
+          args=(client_socket, client_address, assigned_id),
+          name=thread_name,
+          daemon=True
+      )
+      client_thread.start()
+
+Kyunki Main Thread `client_thread.start()` karne k foran baad wapis `accept()`
+par aa jata hai, is liye naye aane walay clients ko ZERO DELAY k sath accept
+kar liya jata hai!
+
+
+================================================================================
+PART 2: CLIENT SCRIPT WORKING (`client.py`)
+================================================================================
+
+--------------------------------------------------------------------------------
+6. CLIENT INITIALIZATION AUR SERVER CONNECTION
+--------------------------------------------------------------------------------
+Code Lines:
+  client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  client_socket.connect((HOST, PORT))
+  local_ip, local_port = client_socket.getsockname()
+
+Explanation:
+- Client ek TCP socket banata hai aur `127.0.0.1:8888` par 3-way handshake
+  initiate karta hai.
+- `client_socket.getsockname()`: OS client ko jo dynamic source port assign karta
+  hai (maslan 56616) usay retrieve karke terminal par print karta hai.
+- Server se aane wala initial welcome message receive karke screen par display karta hai.
+
+
+--------------------------------------------------------------------------------
+7. CONTINUOUS INTERACTIVE MESSAGE LOOP
+--------------------------------------------------------------------------------
+Code Lines:
+  while True:
+      user_msg = input("Enter message > ").strip()
+      if not user_msg:
+          continue
+      client_socket.sendall(user_msg.encode('utf-8'))
+      ...
+      response = client_socket.recv(BUFFER_SIZE)
+      print(f"[SERVER REPLY] {response.decode('utf-8')}\n")
+
+Explanation:
+- Client `while True` loop mai continuous chalta rehta hai.
+- User terminal par apna message type karta hai.
+- String message ko UTF-8 bytes mai encode karke `sendall()` se network par bhej diya jata hai.
+- Server ka reply `recv()` se wait karke receive hota hai aur screen par print hota hai.
+
+
+--------------------------------------------------------------------------------
+8. TERMINATION HANDLING ('exit' / 'quit') AUR GRACEFUL SHUTDOWN
+--------------------------------------------------------------------------------
+Code Lines:
+  if user_msg.lower() in ['exit', 'quit', 'bye']:
+      farewell = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+      print(f"\n{farewell}")
+      print("[*] Disconnected successfully. Exiting client...")
+      break
+
+Explanation:
+- Agar user 'exit' ya 'quit' type karta hai, to message server ko chala jata hai.
+- Server se goodbye message aane k baad loop break ho jata hai.
+- `finally` block execute hota hai aur `client_socket.close()` karke connection
+  gracefully terminate ho jata hai.
+
+
+================================================================================
+PART 3: THREAD SYNCHRONIZATION (LOCKS KA ASAL ROLE)
+================================================================================
+
+--------------------------------------------------------------------------------
+9. TERMINAL PRINT SYNCHRONIZATION (print_lock)
+--------------------------------------------------------------------------------
+Masla:
+Python ka standard `print()` function internally completely atomic nahi hota jab
+multiple threads ek sath standard output (stdout) ko likh rahe hon.
+Hal:
+`safe_print()` mai har print call se pehle `print_lock.acquire()` aur baad mai
+`print_lock.release()` hota hai. Is ki waja se terminal par aane walay logs
+hamesha saaf, formatted aur line-by-line rehte hain.
+
+--------------------------------------------------------------------------------
+10. CLIENT STATE TRACKING (state_lock)
+--------------------------------------------------------------------------------
+Masla:
+Agar do clients theek ek hi microsecond mai connect hon, to dono threads
+`client_counter += 1` ko simultaneously read aur update kar sakte hain (Read-Modify-Write Race Condition).
+Hal:
+`state_lock.acquire()` lagane se counter aur dictionary updates atomic ban jatay hain,
+jis se client IDs aur active connection count 100% accurate rehte hain.
+
+
+================================================================================
+PART 4: HOW TO RUN & VERIFICATION (TERMINAL COMMANDS & TRACE)
+================================================================================
+
+--------------------------------------------------------------------------------
+11. MULTI-TERMINAL EXECUTION STEPS
+--------------------------------------------------------------------------------
+Is lab ko test karne k liye kam az kam 3 terminals open karein:
+
+TERMINAL 1: Run Server
+  Command:
+    cd d:\github2\Parallel-and-Distributed-Computing\lab3
+    python server.py
+
+  Expected Server Output:
+    ======================================================================
+          CSC-334: MULTI-THREADED TCP SERVER STARTED
+          Listening on IP: 127.0.0.1 | Port: 8888
+          Main Listener Thread: MainThread
+          Waiting for incoming client connections... (Press Ctrl+C to stop)
+    ======================================================================
+
+TERMINAL 2: Run First Client (Client #1)
+  Command:
+    cd d:\github2\Parallel-and-Distributed-Computing\lab3
+    python client.py
+
+  Expected Client 1 Output:
+    =================================================================
+    [+] CONNECTED TO SERVER SUCCESSFULLY!
+        - Assigned Local Socket : 127.0.0.1:56616
+        - Connected to Server   : 127.0.0.1:8888
+    =================================================================
+    Server: Welcome Client #1! Connected via ClientThread-1-Port56616 at (127.0.0.1:56616).
+    Type any message to communicate, or type 'exit' / 'quit' to disconnect.
+
+    Enter message > Hello Server from Client 1!
+    [SERVER REPLY] Server ACK [Thread: ClientThread-1-Port56616 | Client #1]: Received 'Hello Server from Client 1!' (Length: 28 chars)
+
+TERMINAL 3: Run Second Client (Client #2) Simultaneously!
+  Command:
+    cd d:\github2\Parallel-and-Distributed-Computing\lab3
+    python client.py
+
+  Expected Client 2 Output:
+    =================================================================
+    [+] CONNECTED TO SERVER SUCCESSFULLY!
+        - Assigned Local Socket : 127.0.0.1:56617
+        - Connected to Server   : 127.0.0.1:8888
+    =================================================================
+    Server: Welcome Client #2! Connected via ClientThread-2-Port56617 at (127.0.0.1:56617).
+    Type any message to communicate, or type 'exit' / 'quit' to disconnect.
+
+    Enter message > Hello from Client 2!
+    [SERVER REPLY] Server ACK [Thread: ClientThread-2-Port56617 | Client #2]: Received 'Hello from Client 2!' (Length: 20 chars)
+
+
+--------------------------------------------------------------------------------
+12. SIMULTANEOUS CLIENTS LIVE TRACE & OUTPUT BREAKDOWN
+--------------------------------------------------------------------------------
+Server terminal par dono clients k messages interleaving k sath nazar aate hain,
+lekin kisi client ka data doosray ko disturb nahi karta:
+
+Server Console Live Log:
+[MAIN THREAD] Spawned and started ClientThread-1-Port56616 for 127.0.0.1:56616
+[ClientThread-1-Port56616] Message #1 from Client #1 (127.0.0.1:56616): Hello Server from Client 1!
+[MAIN THREAD] Spawned and started ClientThread-2-Port56617 for 127.0.0.1:56617
+[ClientThread-2-Port56617] Message #1 from Client #2 (127.0.0.1:56617): Hello from Client 2!
+[ClientThread-1-Port56616] Message #2 from Client #1 (127.0.0.1:56616): How are you?
+[ClientThread-2-Port56617] Message #2 from Client #2 (127.0.0.1:56617): I am running in parallel!
+
+Client Exit:
+Jab Client 1 terminal par `exit` likhta hai:
+- Client 1 terminal displays:
+    Server: Goodbye Client #1! Connection closed on ClientThread-1-Port56616.
+    [*] Disconnected successfully. Exiting client...
+- Server terminal displays:
+    -----------------------------------------------------------------
+    [-] THREAD TERMINATED: ClientThread-1-Port56616
+        - Client ID: #1 (127.0.0.1:56616) has disconnected.
+        - Remaining Active Clients: 1
+        - Total Living Threads    : 2
+    -----------------------------------------------------------------
+- Notice: Client #2 connection is completely UNINTERRUPTED and continues working!
+
+================================================================================
+END OF DETAILED CODE WORKING GUIDE
+================================================================================
