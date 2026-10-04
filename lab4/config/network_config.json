@@ -1,0 +1,24 @@
+{
+  "server": {
+    "bind_host": "0.0.0.0",
+    "port": 5000,
+    "max_concurrent_workers": 2,
+    "storage_directory": "server_storage",
+    "socket_timeout_seconds": 15.0
+  },
+  "client": {
+    "target_worker_host": "127.0.0.1",
+    "target_worker_port": 5000,
+    "download_directory": "client_downloads",
+    "ping_samples": 3,
+    "connection_timeout_seconds": 5.0
+  },
+  "recommended_lan_topology": {
+    "subnet_mask": "255.255.255.0",
+    "gateway": "192.168.1.1",
+    "worker_node_static_ip": "192.168.1.1",
+    "client_laptop_static_ip": "192.168.1.2"
+  },
+  "chunk_size_bytes": 65536,
+  "protocol_version": "2.0.0"
+}
