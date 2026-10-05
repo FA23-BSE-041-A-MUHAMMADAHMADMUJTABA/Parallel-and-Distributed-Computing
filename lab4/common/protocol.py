@@ -33,6 +33,10 @@ class MsgType:
     JOB_RESULT    = b"JR"  # Server -> Client: Final job completion status & metrics
     DOWNLOAD_REQ  = b"DR"  # Client -> Server: Request to stream rendered output back
     CANCEL_REQ    = b"CR"  # Client -> Server: Cancel current job
+    FILE_LIST_REQ = b"FL"  # Client -> Server: Request list of shared files
+    FILE_LIST_RESP= b"FR"  # Server -> Client: Response with list of shared files
+    FILE_SHARE_UP = b"FU"  # Client -> Server: Upload file to shared storage
+    FILE_SHARE_ACK= b"FA"  # Server -> Client: Acknowledge shared file upload
     ERROR         = b"ER"  # Bi-directional: Error code & reason
 
 # Default Network Configuration Constants

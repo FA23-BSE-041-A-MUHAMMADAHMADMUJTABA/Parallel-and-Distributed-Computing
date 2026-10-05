@@ -350,3 +350,111 @@ Evidence & Media Files Saved:
 
 100% Verified, Fully Working, and Formally Documented!
 ================================================================================
+
+
+================================================================================
+PART 6: 2 COMPUTERS LAN SETUP (WITHOUT INTERNET) & COMPLEX PROJECT TASK OFFLOADING
+================================================================================
+
+1. DO COMPUTERS KA APAS MAI DIRECT LAN WIRE SE CONNECTION (BINA INTERNET):
+--------------------------------------------------------------------------------
+Agar aap k paas koi WiFi router ya internet mojood nahi hai, to aap Computer A aur
+Computer B ko 1 standard Ethernet (RJ-45) LAN cable k zariye direct connect kar sakte hain:
+
+Step 1: Dono computers k Ethernet ports mai LAN cable connect karein.
+Step 2: Dono computers par Static IP address set karein (Subnet Mask: 255.255.255.0):
+        - Computer B (Server Node): IP = 192.168.1.20, Subnet = 255.255.255.0
+        - Computer A (Client Node): IP = 192.168.1.10, Subnet = 255.255.255.0
+        (Windows Network Settings -> Ethernet Adapter -> IPv4 Properties -> Use the following IP address)
+
+Step 3: Server GUI ya Daemon Computer B par open karein:
+        - `run_server.bat` ya `run_server_gui.bat` double click karein.
+        - Server Dashboard automatically detect kar k screen par apna LAN IP dikha dega:
+          "📌 Computer A Connect IP: 192.168.1.20"
+        - "📋 Copy IP" button se IP copy kiya ja sakta hai.
+        - Server "🚀 Start Server" click kar k listening mode mai chala jata hai.
+
+Step 4: Client GUI Computer A par open karein:
+        - `run_client.bat` double click karein.
+        - "Worker IP" field mai Computer B ka IP enter karein: `192.168.1.20`
+        - "⚡ Handshake & Ping" button click karein!
+
+
+2. CONNECTION ESTABLISH HONE PAR MESSAGES (SERVER & CLIENT FEEDBACK):
+--------------------------------------------------------------------------------
+Jab Client (Computer A) Server (Computer B) se connect hota hai:
+
+A. Server GUI & Console par Live Feedback:
+   - Status Badge change hota hai: `🟢 SERVER LISTENING`
+   - Active Clients Counter: `1 Active Client`
+   - Connected Clients Box mai Computer A ka Record show hota hai:
+     [1] Client ID: client_8325d85e | IP: 192.168.1.10:55523 | Status: AUTHENTICATED
+   - Server Console Log mai prominent message:
+     [+] [CLIENT CONNECTED] Incoming connection from: 192.168.1.10:55523
+     [+] [HANDSHAKE ESTABLISHED] Client Computer 'client_8325d85e' (192.168.1.10) verified protocol v2.0.0!
+         Node ready to receive complex project offload tasks & file shares from 192.168.1.10
+
+B. Client GUI & Console par Live Feedback:
+   - Top Indicator: `🟢 ONLINE (DESKTOP-B)`
+   - Server Status Card: `🟢 Connected to: DESKTOP-B (192.168.1.20)`
+   - Specifications Card: `CPU: 8 Cores | GPU: NVIDIA NVENC Active | Ping RTT: 0.28 ms`
+   - Prominent Popup Notification Display:
+     "🎉 Successfully Connected to Server (Computer B)!
+      • Node Hostname : DESKTOP-B
+      • Bound Address : 192.168.1.20:5000
+      • CPU Hardware  : 8 Processing Cores
+      • Acceleration  : NVIDIA NVENC Active
+      • Ping Latency  : 0.28 ms (Fast LAN Wire)
+      Remote resources are active! You can now offload complex project tasks."
+   - Client Console Log:
+     [TCP CONNECTED] Socket established with 192.168.1.20:5000!
+     [HANDSHAKE VERIFIED] Server 'DESKTOP-B' running protocol v2.0.0
+     [LATENCY PROBE] Measured Round-Trip Time (RTT): 0.28 ms
+     [RESOURCES UNLOCKED] 8 CPU Cores | NVIDIA NVENC Active
+
+
+3. COMPLEX PROJECT TASKS KO DISTRIBUTE KARNA (SERVER RESOURCES KO USE KARNA):
+--------------------------------------------------------------------------------
+Complex projects mai different computational tasks hote hain jo client par chalana
+bhari hota hai. System 3 broad modes support karta hai:
+
+Mode 1: "Complex Project Python Script / Heavy Workload"
+  - Purpose: Aap kisi bhi complex project ka heavy Python code (Data Processing,
+    Monte Carlo Simulation, Matrix/Tensor computation, Prime factorization, Machine Learning)
+    Computer B (Server) par bhej kar us k CPU/GPU se execute karwa sakte hain.
+  - Usage:
+    1. Task Mode dropdown se select karein: `Complex Project Python Script / Heavy Workload`
+    2. Apna project script select karein ya `✨ Gen Script` click karein (jo multi-stage
+       Monte Carlo, Matrix linear algebra, aur Prime search ka heavy workload script generate karta hai).
+    3. `🚀 Offload Task to Remote Worker (Computer B)` click karein.
+    4. Client script ko upload karta hai, Server apna worker process spawn karta hai,
+       aur real-time terminal stdout client k live log console par stream hota hai!
+    5. Output JSON artifact automatically Client k `client_downloads/` folder mai save ho jata hai.
+
+Mode 2: "Video Transcoding (FFmpeg NVENC / GPU)"
+  - Purpose: Heavy 4K/1080p video rendering aur transcoding Server k NVIDIA GPU NVENC
+    hardware encoder par execute karwana.
+
+Mode 3: "CUDA / Matrix Parallel Compute"
+  - Purpose: PyTorch CUDA / NumPy parallel matrix multiplication and tensor traces.
+
+
+4. PEER-TO-PEER LAN FILE SHARING HUB (BINA INTERNET FILE TRANSFER):
+--------------------------------------------------------------------------------
+Computer A aur Computer B k darmiyan bina internet k direct files share karne k liye
+Client GUI mai dedicated tab banaya gaya hai:
+
+- Tab: `📁 LAN File Sharing Hub`
+  1. `📤 Upload File to Server`: Computer A se koi bhi file select kar k Server k shared
+     storage mai direct send karein (SHA-256 integrity auto-verified).
+  2. `🔄 Refresh Server Files`: Server par mojood tamam shared files ki list dekhein
+     (File Name, File Size, Date Modified).
+  3. `📥 Download from Server`: Server se kisi bhi file ka naam likh kar 1-click se
+     apne Client computer par download karein.
+  4. `📂 Open Downloads Folder`: Downloaded files ko Windows Explorer mai foran open karein.
+
+Is tarah Computer A aur Computer B aik complete high-performance distributed cluster
+ban jate hain jo tasks distribute karta hai, remote resources utilize karta hai,
+aur continuous file sharing provide karta hai!
+================================================================================
+

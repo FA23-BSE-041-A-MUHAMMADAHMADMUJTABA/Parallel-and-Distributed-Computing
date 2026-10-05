@@ -1,8 +1,18 @@
 @echo off
-title Remote Worker Node Daemon (Port 5000)
+title CSC-334 Remote Worker Node (Computer B)
 cd /d "%~dp0.."
 echo ======================================================================
-echo   CSC-334: REMOTE GPU TASK EXECUTION ENGINE DAEMON
+echo   CSC-334: REMOTE WORKER SERVER NODE (COMPUTER B)
 echo ======================================================================
-python -u lab4/server/server_daemon.py --host 127.0.0.1 --port 5000
+echo   [1] Launch Modern Server GUI Dashboard (Recommended)
+echo   [2] Launch Command-Line Console Daemon (0.0.0.0:5000)
+echo ======================================================================
+set /p choice="Select Option [1 or 2] (Default 1): "
+if "%choice%"=="2" (
+    echo Starting Server CLI Daemon on 0.0.0.0:5000...
+    python -u lab4/server/server_daemon.py --host 0.0.0.0 --port 5000
+) else (
+    echo Starting Modern Server GUI Dashboard...
+    python lab4/server/server_gui.py
+)
 pause

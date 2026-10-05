@@ -221,27 +221,46 @@ Install all required libraries into your Python environment:
 pip install -r lab4/requirements.txt
 ```
 
-### 1. Launching the Remote Worker Node Daemon (Server Machine)
-Open a terminal on your worker computer (or a separate terminal window for local testing):
-```bash
-python lab4/server/server_daemon.py --host 0.0.0.0 --port 5000
-```
-*The daemon will bind to port 5000, detect GPU/CPU hardware capabilities, and listen for incoming client offload requests.*
+### 1. Launching the Remote Worker Node (Server Computer B)
+You can launch the Server either via the **Modern GUI Dashboard** or the **Command-Line Daemon**:
+
+- **Option A: Modern Server GUI Dashboard (Recommended)**
+  Double-click `run_server_gui.bat` or run:
+  ```bash
+  python lab4/server/server_gui.py
+  ```
+  *Features: Auto-detects and displays your LAN IP to enter on Computer A, shows connected clients in real-time, monitors active task progress, hardware acceleration status, and provides a direct LAN file sharing hub.*
+
+- **Option B: Command-Line Daemon**
+  Double-click `run_server.bat` (select option 2) or run:
+  ```bash
+  python lab4/server/server_daemon.py --host 0.0.0.0 --port 5000
+  ```
 
 ---
 
-### 2. Launching the Client Desktop GUI (Client Laptop)
-Open a terminal on your client laptop:
+### 2. Launching the Client Desktop GUI (Client Computer A)
+Double-click `run_client.bat` or run:
 ```bash
 python lab4/client/client_gui.py
 ```
+
 **Operating Steps**:
-1. Enter the Remote Worker's IP (e.g., `192.168.1.1` or `127.0.0.1`) and Port `5000`.
-2. Click **"⚡ Handshake & Ping"**: Verify the green "Worker: ONLINE" status and RTT latency.
-3. Click **"🎬 Gen Asset"** to generate a synthetic HD test video (or click **Browse...** to pick an existing video).
-4. Configure your desired Resolution (e.g. `1280x720`), Bitrate (`3000k`), and Preset (`fast`).
-5. Click **"🚀 Offload Task to Remote Worker"**: Watch the live progress bar, speed multiplier, and real-time terminal logs.
-6. Observe the green **"SHA-256: VERIFIED ✔"** badge upon completed render and download!
+1. **Connect & Handshake**: Enter Server B's IP address (shown on Server GUI, e.g. `192.168.1.20`) and Port `5000`. Click **"⚡ Handshake & Ping"**.
+   - **Prominent Feedback**: A connection modal pops up confirming: Server hostname, CPU core count, GPU acceleration status, and round-trip ping latency.
+   - **Server Display**: Server GUI automatically alerts with incoming client IP, client ID, and increments active clients counter.
+2. **Distribute Complex Project Tasks**:
+   - Select Task Mode: **"Complex Project Python Script / Heavy Workload"**.
+   - Select your project script or click **"✨ Gen Script"** (generates multi-stage Monte Carlo, Matrix tensor operations, and prime sieve simulation).
+   - Click **"🚀 Offload Task to Remote Worker (Computer B)"**.
+   - Real-time stdout from the server process streams directly into your client log console!
+   - Result summary artifact JSON is downloaded with SHA-256 integrity verification.
+3. **Peer-to-Peer LAN File Sharing (Without Internet)**:
+   - Switch to the **"📁 LAN File Sharing Hub"** tab.
+   - Click **"📤 Upload File to Server"** to share any file directly to Server B.
+   - Click **"🔄 Refresh Server Files"** to view all files stored on Server B.
+   - Click **"📥 Download from Server"** to download any file to Computer A.
+
 
 ---
 

@@ -14,7 +14,10 @@ import time
 import json
 import subprocess
 from typing import Dict, Any, Callable, Optional
-from ..common.utils import get_ffmpeg_binary, detect_system_capabilities
+try:
+    from ..common.utils import get_ffmpeg_binary, detect_system_capabilities
+except (ImportError, ValueError):
+    from lab4.common.utils import get_ffmpeg_binary, detect_system_capabilities
 
 
 class RemoteExecutionEngine:
@@ -87,11 +90,11 @@ class RemoteExecutionEngine:
 
         acceleration_label = "NVIDIA NVENC (GPU)" if use_nvenc else "Multi-Threaded CPU (libx264)"
 
-        # Spawn FFmpeg process with stderr=subprocess.DEVNULL to avoid buffer deadlocks
+        # Spawn FFmpeg process with stderr=subprocess.PIPE to capture error diagnostics safely
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             universal_newlines=True
@@ -145,20 +148,26 @@ class RemoteExecutionEngine:
             process.kill()
             raise e
 
+        # Safely read stderr diagnostic if available
+        stderr_out = ""
+        if process.stderr:
+            try:
+                stderr_out = process.stderr.read()
+            except Exception:
+                stderr_out = ""
+
         # If NVENC failed because host lacks GPU, retry automatically with CPU fallback
         if process.returncode != 0 and use_nvenc:
-            stderr_out = process.stderr.read()
-            if "Cannot load nvcuda.dll" in stderr_out or "Error while opening encoder" in stderr_out:
+            if "Cannot load nvcuda.dll" in stderr_out or "Error while opening encoder" in stderr_out or "Unknown encoder" in stderr_out:
                 if progress_callback:
                     progress_callback(0.0, 0.0, "1.0x", 0.0, "NVENC unavailable on host. Retrying with CPU fallback...")
                 config["mode"] = "cpu"
                 return self.execute_video_transcode(input_path, output_path, config, progress_callback, check_cancelled)
             else:
-                return {"success": False, "error": f"FFmpeg error: {stderr_out[:200]}"}
+                return {"success": False, "error": f"FFmpeg error: {stderr_out[:200] if stderr_out else 'Encoding failed'}"}
 
         if process.returncode != 0:
-            stderr_out = process.stderr.read()
-            return {"success": False, "error": f"FFmpeg execution failed (code {process.returncode}): {stderr_out[:200]}"}
+            return {"success": False, "error": f"FFmpeg execution failed (code {process.returncode}): {stderr_out[:200] if stderr_out else 'Execution error'}"}
 
         total_duration = time.time() - start_time
         return {
@@ -189,13 +198,16 @@ class RemoteExecutionEngine:
 
         engine_name = "CPU Parallel NumPy (BLAS Optimized)"
         use_torch = False
+        torch_mod = None
         try:
-            import torch
-            if torch.cuda.is_available():
-                engine_name = f"NVIDIA CUDA GPU ({torch.cuda.get_device_name(0)})"
+            import importlib
+            torch_mod = importlib.import_module("torch")
+            if hasattr(torch_mod, "cuda") and torch_mod.cuda.is_available():
+                engine_name = f"NVIDIA CUDA GPU ({torch_mod.cuda.get_device_name(0)})"
                 use_torch = True
         except Exception:
-            pass
+            use_torch = False
+            torch_mod = None
 
         results = []
         for i in range(iterations):
@@ -203,13 +215,12 @@ class RemoteExecutionEngine:
                 return {"success": False, "error": "Task cancelled by client"}
 
             iter_start = time.time()
-            if use_torch:
+            if use_torch and torch_mod is not None:
                 # GPU Tensor Matrix Multiplication
-                import torch
-                a = torch.randn(matrix_size, matrix_size, device="cuda")
-                b = torch.randn(matrix_size, matrix_size, device="cuda")
-                c = torch.matmul(a, b)
-                trace_val = float(torch.trace(c).cpu())
+                a = torch_mod.randn(matrix_size, matrix_size, device="cuda")
+                b = torch_mod.randn(matrix_size, matrix_size, device="cuda")
+                c = torch_mod.matmul(a, b)
+                trace_val = float(torch_mod.trace(c).cpu())
             else:
                 # High-performance NumPy Matrix Multiplication
                 a = np.random.randn(matrix_size, matrix_size).astype(np.float32)
@@ -279,3 +290,109 @@ class RemoteExecutionEngine:
             pass
 
         return 10.0
+
+    def execute_custom_script(
+        self,
+        script_path: str,
+        output_path: str,
+        config: Dict[str, Any],
+        progress_callback: Optional[Callable[[float, float, str, float, str], None]] = None,
+        check_cancelled: Optional[Callable[[], bool]] = None
+    ) -> Dict[str, Any]:
+        """
+        Executes an offloaded custom Python project script or heavy computation workload
+        on this remote worker node using server CPU cores & memory.
+        Streams real-time console stdout directly back to the client.
+        """
+        start_time = time.time()
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+        if not os.path.exists(script_path):
+            return {"success": False, "error": f"Script not found: {script_path}"}
+
+        # Build execution command using current Python interpreter
+        cmd = [sys.executable, script_path, output_path]
+        extra_args = config.get("args", [])
+        if isinstance(extra_args, list):
+            cmd.extend([str(a) for a in extra_args])
+
+        engine_name = f"Remote Server CPU Compute ({self.sys_info.get('hostname', 'Server')} - {self.sys_info.get('cpu_count', 4)} Cores)"
+        if progress_callback:
+            progress_callback(5.0, 0.0, "1.0x", 0.0, f"Spawning worker process on {self.sys_info.get('hostname')}...")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        all_logs = []
+        current_pct = 5.0
+        line_count = 0
+
+        try:
+            for line in process.stdout:
+                if check_cancelled and check_cancelled():
+                    process.kill()
+                    return {"success": False, "error": "Task cancelled by client."}
+
+                clean_line = line.strip()
+                if not clean_line:
+                    continue
+                all_logs.append(clean_line)
+                line_count += 1
+
+                # Parse standardized [PROGRESS] markers if script outputs them
+                if "[PROGRESS]" in clean_line:
+                    try:
+                        part = clean_line.split("[PROGRESS]")[1].strip()
+                        pct_str, desc = part.split("% - ")
+                        current_pct = float(pct_str)
+                        if progress_callback:
+                            progress_callback(current_pct, float(line_count), "Active", 0.0, desc)
+                    except Exception:
+                        if progress_callback:
+                            progress_callback(current_pct, float(line_count), "Active", 0.0, clean_line)
+                else:
+                    # Incrementally bump progress up to 90% for general scripts
+                    current_pct = min(92.0, current_pct + 1.5)
+                    if progress_callback:
+                        progress_callback(current_pct, float(line_count), "Active", 0.0, clean_line[:60])
+
+            process.wait()
+        except Exception as e:
+            process.kill()
+            return {"success": False, "error": f"Process execution error: {e}"}
+
+        total_duration = time.time() - start_time
+
+        if process.returncode != 0:
+            err_summary = "\n".join(all_logs[-10:]) if all_logs else f"Exited with code {process.returncode}"
+            return {"success": False, "error": f"Script failed (exit code {process.returncode}): {err_summary}"}
+
+        # If output file wasn't created by script itself, write stdout summary
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            summary_data = {
+                "task_type": "custom_script",
+                "engine": engine_name,
+                "script_name": os.path.basename(script_path),
+                "duration_seconds": round(total_duration, 3),
+                "lines_processed": line_count,
+                "execution_stdout": all_logs
+            }
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(summary_data, f, indent=2)
+
+        if progress_callback:
+            progress_callback(100.0, float(line_count), "Done", 0.0, "Script Completed Successfully")
+
+        return {
+            "success": True,
+            "engine": engine_name,
+            "duration": total_duration,
+            "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
+            "lines_output": line_count
+        }
