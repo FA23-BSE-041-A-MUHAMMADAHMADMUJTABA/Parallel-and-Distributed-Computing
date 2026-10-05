@@ -70,10 +70,31 @@ class RemoteExecutionEngine:
             codec = "libx264"
             encoder_args = ["-c:v", codec, "-preset", preset, "-b:v", str(bitrate), "-threads", str(self.sys_info["cpu_count"])]
 
-        # Video filter options
-        vf_args = []
+        # Video filter options & creative editing effects
+        vf_filters = []
         if resolution != "original" and "x" in resolution:
-            vf_args = ["-vf", f"scale={resolution}"]
+            vf_filters.append(f"scale={resolution}")
+
+        filter_effect = config.get("filter", "none")
+        if filter_effect == "grayscale":
+            vf_filters.append("format=gray")
+        elif filter_effect == "sepia":
+            vf_filters.append("colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131")
+        elif filter_effect == "mirror":
+            vf_filters.append("hflip")
+        elif filter_effect == "blur":
+            vf_filters.append("boxblur=5:1")
+        elif filter_effect == "speed_2x":
+            vf_filters.append("setpts=0.5*PTS")
+
+        vf_args = []
+        if vf_filters:
+            vf_args = ["-vf", ",".join(vf_filters)]
+
+        fps_val = str(config.get("fps", "original"))
+        if fps_val != "original":
+            clean_fps = fps_val.replace(" fps", "").strip()
+            vf_args.extend(["-r", clean_fps])
 
         # Build FFmpeg command with progress pipe
         cmd = [

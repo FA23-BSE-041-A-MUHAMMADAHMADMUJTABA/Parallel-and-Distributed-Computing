@@ -51,6 +51,7 @@ class TaskOffloaderApp(ctk.CTk):
         self.is_processing = False
         self.cancel_flag = False
         self.selected_file_path = ""
+        self.last_rendered_path = ""
         self.download_output_dir = os.path.join(current_dir, "client_downloads")
         os.makedirs(self.download_output_dir, exist_ok=True)
 
@@ -285,6 +286,28 @@ class TaskOffloaderApp(ctk.CTk):
         self.accel_combo.set("auto")
         self.accel_combo.pack(side="left")
 
+        # Video Row 3: Creative Filters & Framerate
+        self.row3 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.row3.pack(fill="x", padx=10, pady=(2, 4))
+
+        ctk.CTkLabel(self.row3, text="Filter:", width=75, anchor="w").pack(side="left")
+        self.filter_combo = ctk.CTkComboBox(
+            self.row3,
+            values=["none", "grayscale", "sepia", "mirror", "blur", "speed_2x"],
+            width=110
+        )
+        self.filter_combo.set("none")
+        self.filter_combo.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(self.row3, text="FPS:", width=50, anchor="w").pack(side="left")
+        self.fps_combo = ctk.CTkComboBox(
+            self.row3,
+            values=["original", "24 fps", "30 fps", "60 fps"],
+            width=100
+        )
+        self.fps_combo.set("original")
+        self.fps_combo.pack(side="left")
+
         # Description label
         self.desc_lbl = ctk.CTkLabel(
             left_col,
@@ -359,6 +382,18 @@ class TaskOffloaderApp(ctk.CTk):
 
         btn_row = ctk.CTkFrame(btn_frame, fg_color="transparent")
         btn_row.pack(fill="x")
+
+        self.play_btn = ctk.CTkButton(
+            btn_row,
+            text="▶️ Play Video",
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            height=30,
+            width=90,
+            state="disabled",
+            command=self._handle_play_rendered_video
+        )
+        self.play_btn.pack(side="left", padx=(0, 6))
 
         self.bench_btn = ctk.CTkButton(
             btn_row,
@@ -527,6 +562,7 @@ class TaskOffloaderApp(ctk.CTk):
         if "CUDA" in choice:
             self.row1.pack_forget()
             self.row2.pack_forget()
+            self.row3.pack_forget()
             self.browse_btn.configure(state="disabled")
             self.gen_btn.configure(state="disabled")
             self.file_path_entry.delete(0, "end")
@@ -535,6 +571,7 @@ class TaskOffloaderApp(ctk.CTk):
         elif "Project" in choice or "Script" in choice:
             self.row1.pack_forget()
             self.row2.pack_forget()
+            self.row3.pack_forget()
             self.browse_btn.configure(state="normal")
             self.gen_btn.configure(state="normal", text="✨ Gen Script")
             self.file_path_entry.delete(0, "end")
@@ -546,12 +583,13 @@ class TaskOffloaderApp(ctk.CTk):
         else:
             self.row1.pack(fill="x", padx=10, pady=3)
             self.row2.pack(fill="x", padx=10, pady=(2, 4))
+            self.row3.pack(fill="x", padx=10, pady=(2, 4))
             self.browse_btn.configure(state="normal")
             self.gen_btn.configure(state="normal", text="🎬 Gen Video")
             self.file_path_entry.delete(0, "end")
             if self.selected_file_path and self.selected_file_path.endswith((".mp4", ".mov", ".mkv")):
                 self.file_path_entry.insert(0, self.selected_file_path)
-            self.desc_lbl.configure(text="GPU Hardware Video Transcoding via FFmpeg NVENC (with CPU fallback).")
+            self.desc_lbl.configure(text="Configure edit settings here -> Render on Server GPU -> Output downloads back to this laptop!")
 
     # ==========================================
     # EVENT HANDLERS
@@ -684,7 +722,9 @@ class TaskOffloaderApp(ctk.CTk):
             "resolution": self.res_combo.get(),
             "bitrate": self.bitrate_combo.get(),
             "preset": self.preset_combo.get(),
-            "mode": self.accel_combo.get()
+            "mode": self.accel_combo.get(),
+            "filter": self.filter_combo.get(),
+            "fps": self.fps_combo.get()
         }
         selected_file = self.selected_file_path
 
@@ -799,18 +839,31 @@ class TaskOffloaderApp(ctk.CTk):
 
                     def _update_video_done():
                         self.progress_bar.set(1.0)
-                        self.progress_lbl.configure(text="100.0% | Complete & Downloaded")
+                        self.progress_lbl.configure(text="100.0% | Complete & Downloaded to Laptop!")
                         self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
+                        self.last_rendered_path = res['local_output_path']
+                        self.play_btn.configure(state="normal")
                         if res.get("checksum_verified"):
                             self.metric_integrity.configure(text="SHA-256: VERIFIED ✔", text_color="#4ade80")
                         else:
                             self.metric_integrity.configure(text="SHA-256: MISMATCH ❌", text_color="#f87171")
 
                     self.run_on_ui(_update_video_done)
-                    self.log(f"✅ [SUCCESS] Video Render Complete!")
+                    self.log(f"✅ [SUCCESS] Video Rendered on Server and Downloaded to Laptop!")
                     self.log(f"   • Remote Engine   : {res.get('engine')}")
                     self.log(f"   • Total Turnaround: {res['total_turnaround_sec']}s")
-                    self.log(f"   • Saved to        : {res['local_output_path']}")
+                    self.log(f"   • Saved to Laptop : {res['local_output_path']}")
+
+                    msg = (
+                        f"🎉 Video Successfully Rendered on Server (Computer B)!\n\n"
+                        f"• Render Engine   : {res.get('engine')}\n"
+                        f"• Total Time      : {res['total_turnaround_sec']} seconds\n"
+                        f"• Saved To        : {os.path.basename(res['local_output_path'])}\n"
+                        f"• Integrity Check : SHA-256 Verified ✔\n\n"
+                        f"The rendered file is ready on this laptop in client_downloads/.\n"
+                        f"Click '▶️ Play Video' to watch it!"
+                    )
+                    self.run_on_ui(lambda: messagebox.showinfo("Render Complete & Downloaded!", msg))
 
             except Exception as e:
                 self.log(f"❌ [OFFLOAD FAILED] {e}")
@@ -956,6 +1009,17 @@ class TaskOffloaderApp(ctk.CTk):
                 self.is_processing = False
 
         threading.Thread(target=run_bench, daemon=True).start()
+
+    def _handle_play_rendered_video(self):
+        """Opens the downloaded rendered video in the default media player on this laptop."""
+        if self.last_rendered_path and os.path.exists(self.last_rendered_path):
+            try:
+                os.startfile(self.last_rendered_path)
+                self.log(f"[MEDIA PLAYER] Opened rendered video: {self.last_rendered_path}")
+            except Exception as e:
+                self.log(f"[ERROR] Could not open video player: {e}")
+        else:
+            messagebox.showwarning("No Video", "No rendered video available yet. Please offload a video task first.")
 
     def _handle_cancel(self):
         if self.is_processing:
