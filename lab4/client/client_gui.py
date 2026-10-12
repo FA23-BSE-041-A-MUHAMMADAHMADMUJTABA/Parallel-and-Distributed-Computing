@@ -4,7 +4,11 @@ CSC-334: Parallel and Distributed Computing
 Lab 4: Custom Distributed Task Offloading & Remote GPU Rendering System
 Module: client/client_gui.py
 Description: Modern CustomTkinter Desktop GUI for Task Offloading, Remote GPU Rendering,
-             Complex Project Script Distribution, and LAN File Sharing.
+             Third-Party Video Editor Integration (CapCut/ClipChamp/etc.), and LAN File Sharing.
+             - Browse any folder (CapCut exports, ClipChamp output, etc.)
+             - Select a video from the folder listing
+             - Send to remote server for rendering with live logs
+             - Server renders and sends the rendered video back to this laptop
 ================================================================================
 """
 
@@ -17,24 +21,27 @@ from typing import Optional, Dict, Any, List
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
-# Add repository root to path
+# Add client directory to path for local imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-from lab4.client.network_client import OffloadingClient
-from lab4.common.utils import (
-    generate_sample_video, format_bytes, format_time, compute_sha256,
-    generate_sample_project_task
-)
-from lab4.common.protocol import DEFAULT_HOST, DEFAULT_PORT
+from network_client import OffloadingClient
+from utils import generate_sample_video, format_bytes, format_time, compute_sha256
+from protocol import DEFAULT_HOST, DEFAULT_PORT
+
+
+# ============================================================================
+# Supported video file extensions for folder scanning
+# ============================================================================
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".wmv", ".flv", ".m4v", ".ts"}
 
 
 class TaskOffloaderApp(ctk.CTk):
     """
     Modern CustomTkinter GUI for Custom Distributed Task Offloading,
-    Remote Hardware Acceleration, and LAN File Sharing Hub.
+    Remote Hardware Acceleration, Third-Party Video Editor Integration,
+    and LAN File Sharing Hub.
     """
     def __init__(self):
         super().__init__()
@@ -43,8 +50,8 @@ class TaskOffloaderApp(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
         self.title("CSC-334: Distributed Task Offloading & Remote Compute System")
-        self.geometry("1100x820")
-        self.minsize(980, 680)
+        self.geometry("1100x880")
+        self.minsize(980, 720)
 
         # State Variables
         self.client: Optional[OffloadingClient] = None
@@ -52,6 +59,8 @@ class TaskOffloaderApp(ctk.CTk):
         self.cancel_flag = False
         self.selected_file_path = ""
         self.last_rendered_path = ""
+        self.last_log_path = ""
+        self.selected_folder_path = ""
         self.download_output_dir = os.path.join(current_dir, "client_downloads")
         os.makedirs(self.download_output_dir, exist_ok=True)
 
@@ -67,6 +76,7 @@ class TaskOffloaderApp(ctk.CTk):
         # Log Initial System Banner
         self.log("[SYSTEM] Distributed Task Offloading Client initialized (Computer A).")
         self.log(f"[SYSTEM] Default Target: {DEFAULT_HOST}:{DEFAULT_PORT}. Click '⚡ Handshake & Ping' to connect to Computer B.")
+        self.log("[TIP] Use '📂 Video Editor Exports' tab to select your CapCut/ClipChamp/etc. output folder!")
 
     # ==========================================
     # UI BUILDERS
@@ -107,25 +117,25 @@ class TaskOffloaderApp(ctk.CTk):
         sub_lbl.pack(anchor="w", padx=16, pady=(0, 10))
 
     def _build_tab_container(self):
-        """Builds tabs: Tab 1 = Task Offloading; Tab 2 = LAN File Sharing."""
+        """Builds tabs: Tab 1 = Video Editor Exports; Tab 2 = LAN File Sharing."""
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=16, pady=4)
 
-        self.tab_offload = self.tabview.add("🚀 Task Offloading & Compute")
+        self.tab_offload = self.tabview.add("📂 Video Editor Exports (CapCut/ClipChamp)")
         self.tab_sharing = self.tabview.add("📁 LAN File Sharing Hub")
 
         self._build_offload_tab()
         self._build_sharing_tab()
 
     def _build_offload_tab(self):
-        """Tab 1: Config & Network on Left, Real-time Dashboard on Right."""
+        """Tab 1: Folder browser for third-party video editor exports + server rendering."""
         main_container = ctk.CTkFrame(self.tab_offload, fg_color="transparent")
         main_container.pack(fill="both", expand=True, padx=4, pady=2)
         main_container.columnconfigure(0, weight=1)
         main_container.columnconfigure(1, weight=1)
 
         # ==========================================
-        # LEFT COLUMN: Connection & Workload Config
+        # LEFT COLUMN: Connection & Folder Browser
         # ==========================================
         left_col = ctk.CTkFrame(main_container, corner_radius=10)
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=2)
@@ -179,156 +189,198 @@ class TaskOffloaderApp(ctk.CTk):
         )
         self.worker_specs_lbl.pack(anchor="w", padx=10, pady=(0, 5))
 
-        # Section 2: Task Workload & File Picker
-        work_title = ctk.CTkLabel(
+        # Section 2: Third-Party Video Editor Folder Browser
+        folder_title = ctk.CTkLabel(
             left_col,
-            text="⚙️ 2. Workload & Task Configuration",
+            text="📂 2. Select Video Exports Folder (CapCut / ClipChamp / etc.)",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#93c5fd"
         )
-        work_title.pack(anchor="w", padx=14, pady=(8, 4))
+        folder_title.pack(anchor="w", padx=14, pady=(8, 4))
 
-        # Workload Mode Picker
-        mode_row = ctk.CTkFrame(left_col, fg_color="transparent")
-        mode_row.pack(fill="x", padx=14, pady=2)
-        ctk.CTkLabel(mode_row, text="Task Mode:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
-        self.task_type_var = ctk.StringVar(value="Complex Project Python Script / Heavy Workload")
-        self.task_type_combo = ctk.CTkComboBox(
-            mode_row,
-            values=[
-                "Complex Project Python Script / Heavy Workload",
-                "Video Transcoding (FFmpeg NVENC)",
-                "CUDA / Matrix Parallel Compute"
-            ],
-            variable=self.task_type_var,
-            width=290,
-            command=self._on_task_type_change
+        folder_desc = ctk.CTkLabel(
+            left_col,
+            text="Browse to the folder where your video editor saves exported videos.",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
         )
-        self.task_type_combo.pack(side="left", fill="x", expand=True)
+        folder_desc.pack(anchor="w", padx=14, pady=(0, 4))
 
-        # File Picker Row
-        self.file_frame = ctk.CTkFrame(left_col, fg_color="transparent")
-        self.file_frame.pack(fill="x", padx=14, pady=4)
+        folder_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        folder_row.pack(fill="x", padx=14, pady=2)
 
-        # Default sample script path
-        sample_script = os.path.join(current_dir, "sample_project_task.py")
-        if os.path.exists(sample_script):
-            self.selected_file_path = sample_script
+        self.folder_path_entry = ctk.CTkEntry(folder_row, placeholder_text="Select exports folder...", width=240)
+        self.folder_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        self.file_path_entry = ctk.CTkEntry(self.file_frame, placeholder_text="Select task file...", width=240)
-        if self.selected_file_path:
-            self.file_path_entry.insert(0, self.selected_file_path)
-        self.file_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
-
-        self.browse_btn = ctk.CTkButton(
-            self.file_frame,
-            text="Browse...",
-            width=70,
-            command=self._handle_browse_file
+        self.folder_browse_btn = ctk.CTkButton(
+            folder_row,
+            text="📂 Browse Folder",
+            width=120,
+            fg_color="#7c3aed",
+            hover_color="#6d28d9",
+            command=self._handle_browse_folder
         )
-        self.browse_btn.pack(side="left", padx=(0, 6))
+        self.folder_browse_btn.pack(side="left", padx=(0, 6))
 
-        self.gen_btn = ctk.CTkButton(
-            self.file_frame,
-            text="✨ Gen Script",
-            width=90,
+        self.folder_refresh_btn = ctk.CTkButton(
+            folder_row,
+            text="🔄",
+            width=35,
+            fg_color="#475569",
+            hover_color="#334155",
+            command=self._refresh_folder_videos
+        )
+        self.folder_refresh_btn.pack(side="left")
+
+        # Video Files List in Folder
+        self.video_list_label = ctk.CTkLabel(
+            left_col,
+            text="📹 Video Files Found: (select a folder first)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#cbd5e1"
+        )
+        self.video_list_label.pack(anchor="w", padx=14, pady=(6, 2))
+
+        self.video_listbox = ctk.CTkTextbox(
+            left_col,
+            height=100,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color=("#111827", "#030712"),
+            text_color="#e2e8f0"
+        )
+        self.video_listbox.pack(fill="both", expand=True, padx=14, pady=(0, 4))
+        self.video_listbox.insert("end", "No folder selected yet.\nClick '📂 Browse Folder' to select your CapCut/ClipChamp exports directory.\n")
+        self.video_listbox.configure(state="disabled")
+
+        # Video selector row
+        select_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        select_row.pack(fill="x", padx=14, pady=(2, 4))
+
+        self.video_select_entry = ctk.CTkEntry(
+            select_row,
+            placeholder_text="Type video filename or # from list above...",
+            width=200
+        )
+        self.video_select_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.video_pick_btn = ctk.CTkButton(
+            select_row,
+            text="✅ Select Video",
+            width=100,
             fg_color="#059669",
             hover_color="#047857",
-            command=self._handle_generate_test_asset
+            command=self._handle_select_video_from_list
         )
-        self.gen_btn.pack(side="left")
+        self.video_pick_btn.pack(side="left", padx=(0, 6))
 
-        # Workload Parameters Box
-        self.settings_frame = ctk.CTkFrame(left_col, fg_color=("#374151", "#1e293b"), corner_radius=8)
+        self.video_browse_btn = ctk.CTkButton(
+            select_row,
+            text="📄 Browse File",
+            width=90,
+            fg_color="#475569",
+            hover_color="#334155",
+            command=self._handle_browse_single_file
+        )
+        self.video_browse_btn.pack(side="left")
+
+        # Selected file display
+        self.selected_file_lbl = ctk.CTkLabel(
+            left_col,
+            text="Selected: None",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#fbbf24"
+        )
+        self.selected_file_lbl.pack(anchor="w", padx=14, pady=(2, 6))
+
+        # ==========================================
+        # RIGHT COLUMN: Render Config & Dashboard
+        # ==========================================
+        right_col = ctk.CTkFrame(main_container, corner_radius=10)
+        right_col.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
+
+        # Section 3: Render Settings
+        render_title = ctk.CTkLabel(
+            right_col,
+            text="⚙️ 3. Render Configuration (Server-Side)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#93c5fd"
+        )
+        render_title.pack(anchor="w", padx=14, pady=(10, 4))
+
+        # Render Settings Box
+        self.settings_frame = ctk.CTkFrame(right_col, fg_color=("#374151", "#1e293b"), corner_radius=8)
         self.settings_frame.pack(fill="x", padx=14, pady=4)
 
-        # Video Row 1: Resolution & Bitrate
-        self.row1 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.row1.pack(fill="x", padx=10, pady=3)
+        # Row 1: Resolution & Bitrate
+        row1 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        row1.pack(fill="x", padx=10, pady=3)
 
-        ctk.CTkLabel(self.row1, text="Resolution:", width=75, anchor="w").pack(side="left")
+        ctk.CTkLabel(row1, text="Resolution:", width=75, anchor="w").pack(side="left")
         self.res_combo = ctk.CTkComboBox(
-            self.row1,
+            row1,
             values=["1920x1080", "1280x720", "854x480", "3840x2160", "original"],
             width=110
         )
         self.res_combo.set("1280x720")
         self.res_combo.pack(side="left", padx=(0, 10))
 
-        ctk.CTkLabel(self.row1, text="Bitrate:", width=50, anchor="w").pack(side="left")
+        ctk.CTkLabel(row1, text="Bitrate:", width=50, anchor="w").pack(side="left")
         self.bitrate_combo = ctk.CTkComboBox(
-            self.row1,
+            row1,
             values=["1500k", "3000k", "5000k", "8000k", "12000k"],
             width=100
         )
         self.bitrate_combo.set("3000k")
         self.bitrate_combo.pack(side="left")
 
-        # Video Row 2: Preset & Acceleration Mode
-        self.row2 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.row2.pack(fill="x", padx=10, pady=(2, 4))
+        # Row 2: Preset & Acceleration Mode
+        row2 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        row2.pack(fill="x", padx=10, pady=(2, 4))
 
-        ctk.CTkLabel(self.row2, text="Preset:", width=75, anchor="w").pack(side="left")
+        ctk.CTkLabel(row2, text="Preset:", width=75, anchor="w").pack(side="left")
         self.preset_combo = ctk.CTkComboBox(
-            self.row2,
+            row2,
             values=["ultrafast", "fast", "medium", "slow", "p4"],
             width=110
         )
         self.preset_combo.set("fast")
         self.preset_combo.pack(side="left", padx=(0, 10))
 
-        ctk.CTkLabel(self.row2, text="Mode:", width=50, anchor="w").pack(side="left")
+        ctk.CTkLabel(row2, text="Mode:", width=50, anchor="w").pack(side="left")
         self.accel_combo = ctk.CTkComboBox(
-            self.row2,
+            row2,
             values=["auto", "nvenc", "cpu"],
             width=100
         )
         self.accel_combo.set("auto")
         self.accel_combo.pack(side="left")
 
-        # Video Row 3: Creative Filters & Framerate
-        self.row3 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.row3.pack(fill="x", padx=10, pady=(2, 4))
+        # Row 3: Creative Filters & FPS
+        row3 = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        row3.pack(fill="x", padx=10, pady=(2, 4))
 
-        ctk.CTkLabel(self.row3, text="Filter:", width=75, anchor="w").pack(side="left")
+        ctk.CTkLabel(row3, text="Filter:", width=75, anchor="w").pack(side="left")
         self.filter_combo = ctk.CTkComboBox(
-            self.row3,
+            row3,
             values=["none", "grayscale", "sepia", "mirror", "blur", "speed_2x"],
             width=110
         )
         self.filter_combo.set("none")
         self.filter_combo.pack(side="left", padx=(0, 10))
 
-        ctk.CTkLabel(self.row3, text="FPS:", width=50, anchor="w").pack(side="left")
+        ctk.CTkLabel(row3, text="FPS:", width=50, anchor="w").pack(side="left")
         self.fps_combo = ctk.CTkComboBox(
-            self.row3,
+            row3,
             values=["original", "24 fps", "30 fps", "60 fps"],
             width=100
         )
         self.fps_combo.set("original")
         self.fps_combo.pack(side="left")
 
-        # Description label
-        self.desc_lbl = ctk.CTkLabel(
-            left_col,
-            text="Offloads Python workload (Monte Carlo, Matrix Tensor, Simulation) to Computer B's CPU/GPU.",
-            font=ctk.CTkFont(size=11),
-            text_color="#94a3b8"
-        )
-        self.desc_lbl.pack(anchor="w", padx=14, pady=(2, 6))
-
-        # Apply initial mode visibility
-        self._on_task_type_change("Complex Project Python Script / Heavy Workload")
-
-        # ==========================================
-        # RIGHT COLUMN: Progress & Control Dashboard
-        # ==========================================
-        right_col = ctk.CTkFrame(main_container, corner_radius=10)
-        right_col.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
-
+        # Section 4: Real-Time Progress Dashboard
         prog_title = ctk.CTkLabel(
             right_col,
-            text="📊 3. Real-Time Remote Execution Dashboard",
+            text="📊 4. Real-Time Remote Execution Dashboard",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#93c5fd"
         )
@@ -341,7 +393,7 @@ class TaskOffloaderApp(ctk.CTk):
 
         self.progress_lbl = ctk.CTkLabel(
             right_col,
-            text="0.0% | Ready to offload complex task",
+            text="0.0% | Ready to offload video",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#cbd5e1"
         )
@@ -371,7 +423,7 @@ class TaskOffloaderApp(ctk.CTk):
 
         self.offload_btn = ctk.CTkButton(
             btn_frame,
-            text="🚀 Offload Task to Remote Worker (Computer B)",
+            text="🚀 Send Video to Server for Rendering (Computer B)",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#16a34a",
             hover_color="#15803d",
@@ -395,15 +447,27 @@ class TaskOffloaderApp(ctk.CTk):
         )
         self.play_btn.pack(side="left", padx=(0, 6))
 
-        self.bench_btn = ctk.CTkButton(
+        self.view_log_btn = ctk.CTkButton(
             btn_row,
-            text="📈 Benchmark (Local vs Remote)",
+            text="📄 View Logs",
+            fg_color="#0d9488",
+            hover_color="#0f766e",
+            height=30,
+            width=95,
+            state="disabled",
+            command=self._handle_view_server_logs
+        )
+        self.view_log_btn.pack(side="left", padx=(0, 6))
+
+        self.open_dl_btn = ctk.CTkButton(
+            btn_row,
+            text="📂 Open Downloads",
             fg_color="#7c3aed",
             hover_color="#6d28d9",
             height=30,
-            command=self._handle_run_benchmark
+            command=lambda: os.startfile(self.download_output_dir)
         )
-        self.bench_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.open_dl_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.cancel_btn = ctk.CTkButton(
             btn_row,
@@ -558,85 +622,122 @@ class TaskOffloaderApp(ctk.CTk):
     def _clear_logs(self):
         self.log_textbox.delete("1.0", "end")
 
-    def _on_task_type_change(self, choice: str):
-        if "CUDA" in choice:
-            self.row1.pack_forget()
-            self.row2.pack_forget()
-            self.row3.pack_forget()
-            self.browse_btn.configure(state="disabled")
-            self.gen_btn.configure(state="disabled")
-            self.file_path_entry.delete(0, "end")
-            self.file_path_entry.insert(0, "[Synthetic Matrix Tensor Dataset]")
-            self.desc_lbl.configure(text="Parallel Matrix/Tensor linear algebra computation on Server GPU/CPU.")
-        elif "Project" in choice or "Script" in choice:
-            self.row1.pack_forget()
-            self.row2.pack_forget()
-            self.row3.pack_forget()
-            self.browse_btn.configure(state="normal")
-            self.gen_btn.configure(state="normal", text="✨ Gen Script")
-            self.file_path_entry.delete(0, "end")
-            sample_script = os.path.join(current_dir, "sample_project_task.py")
-            if os.path.exists(sample_script):
-                self.selected_file_path = sample_script
-                self.file_path_entry.insert(0, sample_script)
-            self.desc_lbl.configure(text="Offloads Python workload (Monte Carlo, Matrix, Prime Search) to Server B.")
+    # ==========================================
+    # FOLDER BROWSER & VIDEO FILE LISTING
+    # ==========================================
+    def _handle_browse_folder(self):
+        """Opens folder dialog to select a third-party video editor export directory."""
+        folder = filedialog.askdirectory(
+            title="Select Video Editor Exports Folder (CapCut / ClipChamp / etc.)"
+        )
+        if folder:
+            self.selected_folder_path = folder
+            self.folder_path_entry.delete(0, "end")
+            self.folder_path_entry.insert(0, folder)
+            self.log(f"📂 [FOLDER SELECTED] {folder}")
+            self._refresh_folder_videos()
+
+    def _refresh_folder_videos(self):
+        """Scans the selected folder for video files and lists them."""
+        folder = self.folder_path_entry.get().strip()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showwarning("No Folder", "Please select a valid folder first using '📂 Browse Folder'.")
+            return
+
+        self.selected_folder_path = folder
+        video_files = []
+
+        try:
+            for fname in sorted(os.listdir(folder)):
+                fpath = os.path.join(folder, fname)
+                if os.path.isfile(fpath):
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in VIDEO_EXTENSIONS:
+                        size = os.path.getsize(fpath)
+                        mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(fpath)))
+                        video_files.append((fname, size, mtime))
+        except Exception as e:
+            self.log(f"❌ [SCAN ERROR] Could not scan folder: {e}")
+            return
+
+        # Update the video list display
+        self.video_listbox.configure(state="normal")
+        self.video_listbox.delete("1.0", "end")
+
+        if not video_files:
+            self.video_listbox.insert("end", f"No video files found in:\n{folder}\n\nSupported formats: {', '.join(VIDEO_EXTENSIONS)}\n")
+            self.video_list_label.configure(text="📹 Video Files Found: 0")
         else:
-            self.row1.pack(fill="x", padx=10, pady=3)
-            self.row2.pack(fill="x", padx=10, pady=(2, 4))
-            self.row3.pack(fill="x", padx=10, pady=(2, 4))
-            self.browse_btn.configure(state="normal")
-            self.gen_btn.configure(state="normal", text="🎬 Gen Video")
-            self.file_path_entry.delete(0, "end")
-            if self.selected_file_path and self.selected_file_path.endswith((".mp4", ".mov", ".mkv")):
-                self.file_path_entry.insert(0, self.selected_file_path)
-            self.desc_lbl.configure(text="Configure edit settings here -> Render on Server GPU -> Output downloads back to this laptop!")
+            self.video_listbox.insert("end", f"{'#':<4} {'File Name':<40} {'Size':<12} {'Modified'}\n")
+            self.video_listbox.insert("end", "─" * 80 + "\n")
+            for idx, (name, size, mtime) in enumerate(video_files, 1):
+                size_str = format_bytes(size)
+                self.video_listbox.insert("end", f"{idx:<4} {name:<40} {size_str:<12} {mtime}\n")
+            self.video_list_label.configure(text=f"📹 Video Files Found: {len(video_files)}")
+            self.log(f"📹 [SCAN] Found {len(video_files)} video file(s) in: {folder}")
+
+        self.video_listbox.configure(state="disabled")
+
+        # Store the list for selection
+        self._folder_video_files = video_files
+
+    def _handle_select_video_from_list(self):
+        """Selects a video from the folder listing by # or filename."""
+        text = self.video_select_entry.get().strip()
+        if not text:
+            messagebox.showwarning("Empty Selection", "Please type a video filename or # from the list above.")
+            return
+
+        if not hasattr(self, '_folder_video_files') or not self._folder_video_files:
+            messagebox.showwarning("No Videos", "Please scan a folder first by clicking '📂 Browse Folder'.")
+            return
+
+        selected_name = None
+
+        # Try to match by number
+        try:
+            idx = int(text)
+            if 1 <= idx <= len(self._folder_video_files):
+                selected_name = self._folder_video_files[idx - 1][0]
+        except ValueError:
+            pass
+
+        # Try to match by filename
+        if not selected_name:
+            for name, _, _ in self._folder_video_files:
+                if text.lower() in name.lower():
+                    selected_name = name
+                    break
+
+        if not selected_name:
+            messagebox.showerror("Not Found", f"No video matching '{text}' found in the folder.")
+            return
+
+        full_path = os.path.join(self.selected_folder_path, selected_name)
+        if not os.path.exists(full_path):
+            messagebox.showerror("Error", f"File not found: {full_path}")
+            return
+
+        self.selected_file_path = full_path
+        size = os.path.getsize(full_path)
+        self.selected_file_lbl.configure(text=f"Selected: {selected_name} ({format_bytes(size)})")
+        self.log(f"✅ [SELECTED] {selected_name} ({format_bytes(size)}) from exports folder")
+
+    def _handle_browse_single_file(self):
+        """Browse a single video file from anywhere."""
+        path = filedialog.askopenfilename(
+            title="Select Video File",
+            filetypes=[("Video Files", "*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.flv *.m4v *.ts"), ("All Files", "*.*")]
+        )
+        if path:
+            self.selected_file_path = path
+            size = os.path.getsize(path)
+            self.selected_file_lbl.configure(text=f"Selected: {os.path.basename(path)} ({format_bytes(size)})")
+            self.log(f"✅ [SELECTED] {os.path.basename(path)} ({format_bytes(size)})")
 
     # ==========================================
     # EVENT HANDLERS
     # ==========================================
-    def _handle_browse_file(self):
-        is_script = "Project" in self.task_type_var.get() or "Script" in self.task_type_var.get()
-        if is_script:
-            path = filedialog.askopenfilename(
-                title="Select Python Project Script to Offload",
-                filetypes=[("Python Files", "*.py"), ("All Files", "*.*")]
-            )
-        else:
-            path = filedialog.askopenfilename(
-                title="Select Video Asset to Offload",
-                filetypes=[("Video Files", "*.mp4 *.mov *.mkv *.avi *.webm"), ("All Files", "*.*")]
-            )
-
-        if path:
-            self.selected_file_path = path
-            self.file_path_entry.delete(0, "end")
-            self.file_path_entry.insert(0, path)
-            size = os.path.getsize(path)
-            self.log(f"[SELECTED] {os.path.basename(path)} ({format_bytes(size)})")
-
-    def _handle_generate_test_asset(self):
-        """Generates test script or sample video asset based on current mode."""
-        is_script = "Project" in self.task_type_var.get() or "Script" in self.task_type_var.get()
-        
-        def run_gen():
-            if is_script:
-                self.log("[GEN] Generating sample complex project Python script...")
-                script_path = os.path.join(current_dir, "sample_project_task.py")
-                generate_sample_project_task(script_path)
-                self.selected_file_path = script_path
-                self.run_on_ui(lambda: (self.file_path_entry.delete(0, "end"), self.file_path_entry.insert(0, script_path)))
-                self.log(f"[GEN SUCCESS] Created complex project script: {script_path}")
-            else:
-                self.log("[GEN] Generating synthetic 1080p test video asset...")
-                asset_dir = os.path.join(current_dir, "sample_assets")
-                sample_path = os.path.join(asset_dir, "test_render_sample.mp4")
-                generate_sample_video(sample_path, duration_sec=6, resolution=(1280, 720))
-                self.selected_file_path = sample_path
-                self.run_on_ui(lambda: (self.file_path_entry.delete(0, "end"), self.file_path_entry.insert(0, sample_path)))
-                self.log(f"[GEN SUCCESS] Test video created: {sample_path} ({format_bytes(os.path.getsize(sample_path))})")
-
-        threading.Thread(target=run_gen, daemon=True).start()
-
     def _handle_handshake_and_ping(self):
         """Task 1: Handshake protocol and latency ping check with prominent alerts."""
         host = self.ip_entry.get().strip()
@@ -670,7 +771,7 @@ class TaskOffloaderApp(ctk.CTk):
                 self.log(f"🤝 [HANDSHAKE VERIFIED] Server '{hostname}' running protocol v{info.get('protocol_version')}")
                 self.log(f"⚡ [LATENCY PROBE] Measured Round-Trip Time (RTT): {latency} ms")
                 self.log(f"🚀 [RESOURCES UNLOCKED] {cpu_count} CPU Cores | {gpu_status}")
-                self.log(f"   Computer B is now ready to receive complex project tasks & file shares!")
+                self.log(f"   Computer B is now ready to render your video exports!")
 
                 # Prominent notification popup
                 msg = (
@@ -680,7 +781,7 @@ class TaskOffloaderApp(ctk.CTk):
                     f"• CPU Hardware  : {cpu_count} Processing Cores\n"
                     f"• Acceleration  : {gpu_status}\n"
                     f"• Ping Latency  : {latency} ms (Fast LAN Wire)\n\n"
-                    f"Remote resources are active! You can now offload complex project tasks."
+                    f"Remote resources are active! You can now send video exports for rendering."
                 )
                 self.run_on_ui(lambda: messagebox.showinfo("Connected to Server!", msg))
 
@@ -703,17 +804,13 @@ class TaskOffloaderApp(ctk.CTk):
         threading.Thread(target=task, daemon=True).start()
 
     def _handle_start_offload(self):
-        """Initiates task offloading (Video, CUDA, or Complex Project Script)."""
+        """Initiates video rendering offload to remote server."""
         if self.is_processing:
             messagebox.showwarning("Warning", "A task is currently running.")
             return
 
-        choice = self.task_type_var.get()
-        is_cuda = "CUDA" in choice
-        is_script = "Project" in choice or "Script" in choice
-
-        if not is_cuda and (not self.selected_file_path or not os.path.exists(self.selected_file_path)):
-            messagebox.showerror("Error", "Please select or generate an input file first.")
+        if not self.selected_file_path or not os.path.exists(self.selected_file_path):
+            messagebox.showerror("Error", "Please select a video file first.\n\nUse '📂 Browse Folder' to find your CapCut/ClipChamp exports,\nor '📄 Browse File' to select any video file.")
             return
 
         host = self.ip_entry.get().strip()
@@ -732,7 +829,7 @@ class TaskOffloaderApp(ctk.CTk):
         self.cancel_flag = False
 
         self.progress_bar.set(0.0)
-        self.progress_lbl.configure(text="0.0% | Initializing Task Offload...")
+        self.progress_lbl.configure(text="0.0% | Initializing Video Render Offload...")
         self.metric_integrity.configure(text="Checksum: Calculating...", text_color="#fbbf24")
 
         def run_thread():
@@ -776,94 +873,75 @@ class TaskOffloaderApp(ctk.CTk):
                     if status:
                         self.log(f"  [REMOTE] {status}")
 
-                # 1. Complex Project Script Execution
-                if is_script:
-                    self.log(f"\n🚀 [OFFLOAD SCRIPT] Sending complex project script to Server: {os.path.basename(selected_file)}")
-                    res = self.client.offload_custom_script(
-                        script_file=selected_file,
-                        output_dir=self.download_output_dir,
-                        config={},
-                        progress_callback=progress_cb,
-                        cancel_check=lambda: self.cancel_flag
-                    )
+                video_name = os.path.basename(selected_file)
+                self.log(f"\n{'='*60}")
+                self.log(f"🚀 [OFFLOAD VIDEO] Sending '{video_name}' to Server for Rendering")
+                self.log(f"   Source: {selected_file}")
+                self.log(f"   Config: {render_cfg}")
+                self.log(f"{'='*60}")
 
-                    def _update_script_done():
-                        self.progress_bar.set(1.0)
-                        self.progress_lbl.configure(text="100.0% | Project Task Complete!")
-                        self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
+                res = self.client.offload_video_transcode(
+                    input_file=selected_file,
+                    output_dir=self.download_output_dir,
+                    render_config=render_cfg,
+                    progress_callback=progress_cb,
+                    cancel_check=lambda: self.cancel_flag
+                )
+
+                def _update_video_done():
+                    self.progress_bar.set(1.0)
+                    self.progress_lbl.configure(text="100.0% | Complete & Downloaded to Laptop!")
+                    self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
+                    self.last_rendered_path = res['local_output_path']
+                    self.last_log_path = res.get('local_log_path', '')
+                    self.play_btn.configure(state="normal")
+                    if self.last_log_path and os.path.exists(self.last_log_path):
+                        self.view_log_btn.configure(state="normal")
+                    if res.get("checksum_verified"):
                         self.metric_integrity.configure(text="SHA-256: VERIFIED ✔", text_color="#4ade80")
+                    else:
+                        self.metric_integrity.configure(text="SHA-256: MISMATCH ❌", text_color="#f87171")
 
-                    self.run_on_ui(_update_script_done)
-                    self.log(f"✅ [SUCCESS] Complex Project Script executed on Server in {res['total_turnaround_sec']}s!")
-                    self.log(f"   • Remote Engine : {res['engine']}")
-                    self.log(f"   • Remote Runtime: {res['remote_compute_duration_sec']}s")
-                    self.log(f"   • Output Saved  : {res['local_output_path']}")
+                self.run_on_ui(_update_video_done)
 
-                    msg = (
-                        f"🎉 Complex Project Task Completed on Server (Computer B)!\n\n"
-                        f"• Total Turnaround : {res['total_turnaround_sec']} seconds\n"
-                        f"• Remote Execution : {res['remote_compute_duration_sec']} seconds\n"
-                        f"• Engine Used      : {res['engine']}\n"
-                        f"• Result Artifact  : {os.path.basename(res['local_output_path'])}\n\n"
-                        f"Saved to: client_downloads/"
-                    )
-                    self.run_on_ui(lambda: messagebox.showinfo("Project Task Completed!", msg))
+                self.log(f"\n{'='*60}")
+                self.log(f"✅ [SUCCESS] Video Rendered on Server and Downloaded to Laptop!")
+                self.log(f"   • Source File     : {video_name}")
+                self.log(f"   • Remote Engine   : {res.get('engine')}")
+                self.log(f"   • Upload Time     : {res['upload_duration_sec']}s")
+                self.log(f"   • Render Time     : {res['remote_compute_duration_sec']}s")
+                self.log(f"   • Download Time   : {res['download_duration_sec']}s")
+                self.log(f"   • Total Turnaround: {res['total_turnaround_sec']}s")
+                self.log(f"   • Input Size      : {format_bytes(res['input_file_size'])}")
+                self.log(f"   • Output Size     : {format_bytes(res['output_file_size'])}")
+                self.log(f"   • SHA-256 Verified: {'✔ YES' if res.get('checksum_verified') else '❌ NO'}")
+                self.log(f"   • Saved to Laptop : {res['local_output_path']}")
+                if res.get('local_log_path'):
+                    self.log(f"   • Server Log File : {res['local_log_path']}")
+                self.log(f"{'='*60}")
 
-                # 2. CUDA / Tensor Matrix Compute
-                elif is_cuda:
-                    self.log("\n🚀 [OFFLOAD CUDA] Submitting CUDA / Parallel Matrix Tensor Workload to Server...")
-                    res = self.client.offload_cuda_compute(
-                        matrix_size=1200,
-                        iterations=15,
-                        output_dir=self.download_output_dir,
-                        progress_callback=progress_cb
-                    )
-                    self.log(f"✅ [SUCCESS] CUDA Compute completed in {res['total_turnaround_sec']}s!")
-                    def _update_cuda_done():
-                        self.progress_bar.set(1.0)
-                        self.progress_lbl.configure(text="100.0% | Complete")
-                        self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
-                        self.metric_integrity.configure(text="Integrity: VERIFIED ✔", text_color="#4ade80")
-                    self.run_on_ui(_update_cuda_done)
+                # Print server log excerpt in console if available
+                if res.get('server_logs_text'):
+                    self.log(f"\n📋 [SERVER EXECUTION LOG SUMMARY]")
+                    for l in res['server_logs_text'].splitlines()[:15]:
+                        self.log(f"   {l}")
+                    if len(res['server_logs_text'].splitlines()) > 15:
+                        self.log(f"   ... ({len(res['server_logs_text'].splitlines()) - 15} more lines in log file)")
 
-                # 3. Video Transcoding Workload
-                else:
-                    self.log(f"\n🚀 [OFFLOAD VIDEO] Initiating video transcode offload to Server: {render_cfg}")
-                    res = self.client.offload_video_transcode(
-                        input_file=selected_file,
-                        output_dir=self.download_output_dir,
-                        render_config=render_cfg,
-                        progress_callback=progress_cb,
-                        cancel_check=lambda: self.cancel_flag
-                    )
-
-                    def _update_video_done():
-                        self.progress_bar.set(1.0)
-                        self.progress_lbl.configure(text="100.0% | Complete & Downloaded to Laptop!")
-                        self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
-                        self.last_rendered_path = res['local_output_path']
-                        self.play_btn.configure(state="normal")
-                        if res.get("checksum_verified"):
-                            self.metric_integrity.configure(text="SHA-256: VERIFIED ✔", text_color="#4ade80")
-                        else:
-                            self.metric_integrity.configure(text="SHA-256: MISMATCH ❌", text_color="#f87171")
-
-                    self.run_on_ui(_update_video_done)
-                    self.log(f"✅ [SUCCESS] Video Rendered on Server and Downloaded to Laptop!")
-                    self.log(f"   • Remote Engine   : {res.get('engine')}")
-                    self.log(f"   • Total Turnaround: {res['total_turnaround_sec']}s")
-                    self.log(f"   • Saved to Laptop : {res['local_output_path']}")
-
-                    msg = (
-                        f"🎉 Video Successfully Rendered on Server (Computer B)!\n\n"
-                        f"• Render Engine   : {res.get('engine')}\n"
-                        f"• Total Time      : {res['total_turnaround_sec']} seconds\n"
-                        f"• Saved To        : {os.path.basename(res['local_output_path'])}\n"
-                        f"• Integrity Check : SHA-256 Verified ✔\n\n"
-                        f"The rendered file is ready on this laptop in client_downloads/.\n"
-                        f"Click '▶️ Play Video' to watch it!"
-                    )
-                    self.run_on_ui(lambda: messagebox.showinfo("Render Complete & Downloaded!", msg))
+                log_info = f"\n• Server Log File : {os.path.basename(res['local_log_path']) if res.get('local_log_path') else 'Attached'}"
+                msg = (
+                    f"🎉 Video Successfully Rendered on Server (Computer B)!\n\n"
+                    f"• Source File     : {video_name}\n"
+                    f"• Render Engine   : {res.get('engine')}\n"
+                    f"• Upload Time     : {res['upload_duration_sec']} seconds\n"
+                    f"• Render Time     : {res['remote_compute_duration_sec']} seconds\n"
+                    f"• Download Time   : {res['download_duration_sec']} seconds\n"
+                    f"• Total Time      : {res['total_turnaround_sec']} seconds\n"
+                    f"• Integrity Check : SHA-256 Verified ✔{log_info}\n\n"
+                    f"The rendered file & execution logs are ready in client_downloads/.\n"
+                    f"Click '▶️ Play Video' to watch or '📄 View Logs' to inspect details!"
+                )
+                self.run_on_ui(lambda: messagebox.showinfo("Render Complete & Downloaded!", msg))
 
             except Exception as e:
                 self.log(f"❌ [OFFLOAD FAILED] {e}")
@@ -972,44 +1050,6 @@ class TaskOffloaderApp(ctk.CTk):
 
         threading.Thread(target=task, daemon=True).start()
 
-    def _handle_run_benchmark(self):
-        """Runs the automated Local vs Remote benchmark suite (Task 5)."""
-        if self.is_processing:
-            messagebox.showwarning("Warning", "A task is currently running.")
-            return
-
-        host = self.ip_entry.get().strip()
-        port = int(self.port_entry.get().strip())
-        self.is_processing = True
-
-        def run_bench():
-            try:
-                self.log("=" * 60)
-                self.log("[BENCHMARK] Starting Local vs Remote Comparative Analysis (Task 5)...")
-                from lab4.client.benchmark import run_comparative_benchmark
-                
-                test_asset = self.selected_file_path
-                if not test_asset or not os.path.exists(test_asset) or not test_asset.endswith(".mp4"):
-                    self.log("[BENCHMARK] Generating standard test video asset for benchmark...")
-                    asset_dir = os.path.join(current_dir, "sample_assets")
-                    test_asset = os.path.join(asset_dir, "bench_sample.mp4")
-                    generate_sample_video(test_asset, duration_sec=5, resolution=(1280, 720))
-
-                results = run_comparative_benchmark(
-                    worker_host=host,
-                    worker_port=port,
-                    sample_video_path=test_asset,
-                    log_fn=self.log
-                )
-                self.log("[BENCHMARK COMPLETE] Technical report and performance charts generated!")
-                messagebox.showinfo("Benchmark Completed", f"Benchmark Finished!\nOverall Speedup: {results.get('average_speedup', 'N/A')}x\nCharts saved in lab4/benchmarks/!")
-            except Exception as e:
-                self.log(f"[BENCHMARK ERROR] {e}")
-            finally:
-                self.is_processing = False
-
-        threading.Thread(target=run_bench, daemon=True).start()
-
     def _handle_play_rendered_video(self):
         """Opens the downloaded rendered video in the default media player on this laptop."""
         if self.last_rendered_path and os.path.exists(self.last_rendered_path):
@@ -1019,7 +1059,18 @@ class TaskOffloaderApp(ctk.CTk):
             except Exception as e:
                 self.log(f"[ERROR] Could not open video player: {e}")
         else:
-            messagebox.showwarning("No Video", "No rendered video available yet. Please offload a video task first.")
+            messagebox.showwarning("No Video", "No rendered video available yet. Please send a video for rendering first.")
+
+    def _handle_view_server_logs(self):
+        """Opens the downloaded server execution log file."""
+        if self.last_log_path and os.path.exists(self.last_log_path):
+            try:
+                os.startfile(self.last_log_path)
+                self.log(f"[LOG VIEWER] Opened server execution log: {self.last_log_path}")
+            except Exception as e:
+                self.log(f"[ERROR] Could not open log viewer: {e}")
+        else:
+            messagebox.showwarning("No Logs", "No server execution logs available yet. Please complete a render task first.")
 
     def _handle_cancel(self):
         if self.is_processing:

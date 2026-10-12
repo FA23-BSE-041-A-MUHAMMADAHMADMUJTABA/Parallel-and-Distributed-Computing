@@ -15,13 +15,13 @@ import hashlib
 import threading
 from typing import Dict, Any, Optional, List, Callable
 
-from ..common.protocol import (
+from protocol import (
     MsgType, send_packet, send_json, read_packet, read_json,
     CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION
 )
-from ..common.utils import compute_sha256, format_bytes, detect_system_capabilities
-from .task_queue import TaskQueueManager, TaskItem, TaskStatus
-from .execution_engine import RemoteExecutionEngine
+from utils import compute_sha256, format_bytes, detect_system_capabilities
+from task_queue import TaskQueueManager, TaskItem, TaskStatus
+from execution_engine import RemoteExecutionEngine
 
 
 class RemoteWorkerServer:
@@ -163,7 +163,7 @@ class RemoteWorkerServer:
                             self.connected_clients[addr_key]["status"] = "AUTHENTICATED"
 
                     self.log(f"[+] [HANDSHAKE ESTABLISHED] Client Computer '{client_id}' ({addr[0]}) verified protocol v{PROTOCOL_VERSION}!")
-                    self.log(f"   Node ready to receive complex project offload tasks & file shares from {addr[0]}")
+                    self.log(f"   Node ready to receive video render tasks & file shares from {addr[0]}")
                     
                     if self.on_client_connected:
                         try:
@@ -196,7 +196,7 @@ class RemoteWorkerServer:
                     }
                     send_json(sock, MsgType.PONG_RESP, pong_data)
 
-                # 3. TASK 2 & 4: Job Submission & Complex Project Offloading
+                # 3. TASK 2 & 4: Job Submission & Video Render Offloading
                 elif msg_type == MsgType.JOB_SUBMIT:
                     with self._lock:
                         if addr_key in self.connected_clients:
@@ -398,6 +398,11 @@ class RemoteWorkerServer:
                 output_size = os.path.getsize(task.output_path) if os.path.exists(task.output_path) else 0
                 output_sha256 = compute_sha256(task.output_path) if output_size > 0 else ""
 
+                log_file_name = res.get("log_file_name", "")
+                log_path = res.get("log_path", "")
+                log_size = os.path.getsize(log_path) if log_path and os.path.exists(log_path) else 0
+                log_sha256 = compute_sha256(log_path) if log_size > 0 else ""
+
                 result_payload = {
                     "task_id": task.task_id,
                     "status": "COMPLETED",
@@ -406,9 +411,15 @@ class RemoteWorkerServer:
                     "output_file_name": os.path.basename(task.output_path),
                     "output_size_bytes": output_size,
                     "output_sha256": output_sha256,
+                    "log_file_name": log_file_name,
+                    "log_size_bytes": log_size,
+                    "log_sha256": log_sha256,
+                    "logs_text": res.get("logs_text", ""),
                     "metrics": res
                 }
                 self.log(f"[+] [TASK COMPLETE] Task {task.task_id} completed in {task.execution_duration:.2f}s using {res.get('engine')}")
+                if log_file_name:
+                    self.log(f"   [RENDER LOG] Execution log generated: {log_file_name} ({format_bytes(log_size)})")
                 send_json(sock, MsgType.JOB_RESULT, result_payload)
             else:
                 task.status = TaskStatus.FAILED

@@ -12,14 +12,13 @@ import sys
 import argparse
 import signal
 
-# Add repository root to path
+# Add current directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-from lab4.server.network_server import RemoteWorkerServer
-from lab4.common.protocol import DEFAULT_PORT
+from network_server import RemoteWorkerServer
+from protocol import DEFAULT_PORT
 
 
 def main():

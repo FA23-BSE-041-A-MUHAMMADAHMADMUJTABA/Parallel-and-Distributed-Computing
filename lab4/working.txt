@@ -456,5 +456,75 @@ Client GUI mai dedicated tab banaya gaya hai:
 Is tarah Computer A aur Computer B aik complete high-performance distributed cluster
 ban jate hain jo tasks distribute karta hai, remote resources utilize karta hai,
 aur continuous file sharing provide karta hai!
+
 ================================================================================
+PART 6: ALL-IN-ONE UNIFIED FILE (`lab4/app.py` / `lab4/main.py`)
+(CLIENT & SERVER IN 1 FILE + BUILT-IN DISTRIBUTED VIDEO EDITOR TOOL)
+================================================================================
+
+1. YEH SINGLE-FILE ARCHITECTURE KIYA HAI?
+- Problem: Pehle alag alag folders mai `client_gui.py`, `server_gui.py`, `network_server.py`,
+  aur `network_client.py` the. Jab do computers par code le kar jana hota tha to relative
+  imports aur directory paths ki wajah se confusion hoti thi.
+- Solution: `lab4/app.py` aik MUKAMMAL, 100% SELF-CONTAINED single file hai jis k andar:
+    a) Protocol Framing (`MAGIC_BYTES = b"DC"`, 8-byte header, `recvall`)
+    b) Server Daemon (`DistributedRenderServer` with multi-threaded listener)
+    c) Client Communicator (`DistributedRenderClient` with chunk streamer)
+    d) Remote Render Engine (FFmpeg NVENC GPU / CPU multi-threading)
+    e) OpenCV Frame Previewer & Synthetic Video Generator
+    f) Complete Modern Dark-Mode CustomTkinter GUI for BOTH Client & Server!
+
+2. HOW TO RUN:
+   - Server machine (Computer B) par:
+     `python lab4/app.py --server`
+     (Ya double-click `run_server.bat`)
+     -> Server GUI open ho jati hai, apne LAN IPs show karti hai, aur Port 5000 par listen karti hai.
+
+   - Client machine (Computer A) par:
+     `python lab4/app.py --client`
+     (Ya double-click `run_client.bat`)
+     -> Client Video Editor open ho jata hai.
+
+   - Interactive Selector (Dono aik sath / switchable):
+     `python lab4/app.py`
+     (Ya double-click `run_app.bat`)
+     -> Tabs k zariye user kisi bhi waqt Client Video Editor ya Server Node k darmiyan switch kar sakta hai!
+
+3. DISTRIBUTED VIDEO EDITOR TOOL KI WORKING (VIDEO IDR HO, RENDER SERVER SIDE HO):
+   Step 1: Local Video Load Karna:
+           - User 'Browse...' se koi bhi `.mp4`, `.avi`, `.mov`, `.mkv` select karta hai,
+             ya '✨ Gen Test Video' click karke HD synthetic animated video generate karta hai.
+           - OpenCV foran video ki properties (Duration, Dimensions, FPS, File Size) probe karta
+             hai aur LIVE THUMBNAIL FRAME PREVIEW screen par show karta hai!
+
+   Step 2: Video Editing Tool Controls:
+           - ✂️ Trim Range   : Start Time (s) aur End Time (s) select karein.
+           - 🎨 Creative FX  : Grayscale, Sepia, Negate, Blur, Vignette, Mirror, Contrast.
+           - ⏩ Speed        : 0.5x (Slow-Mo), 1.0x, 1.5x, 2.0x, 4.0x (audio automatically pitch-aligned).
+           - 📐 Resolution   : Original, 1080p, 720p, 480p, 1:1 Square (Instagram), 9:16 (TikTok/Shorts).
+           - 🏷️ Watermark    : Custom Text (e.g. 'FA23-BSE-041') with semi-transparent badge overlay.
+           - 🔊 Audio        : Keep Audio ya Mute Audio.
+           - ⚡ Acceleration : Auto (NVENC GPU detect), Force NVENC, ya CPU Multi-threading.
+
+   Step 3: Server Par Offload & Render:
+           - Client video ka SHA-256 hash nikalta hai aur Server ko packet bhejta hai.
+           - Video 64 KB chunks mai Server ko stream hoti hai.
+           - Server video ko reassemble karta hai, checksum verify karta hai, aur FFmpeg
+             render pipeline execute karta hai.
+
+   Step 4: Live Progress & Streaming Logs:
+           - Server render pipeline se `-progress pipe:1` k zariye FPS, Speed, %, aur ETA nikalta hai.
+           - Telemetry packets Client ko real-time bhejta hai.
+           - Client screen par progress bar (0% - 100%) aur LIVE LOG TERMINAL par har event
+             timestamp k sath print hota hai!
+
+   Step 5: Output Download & Local Save:
+           - Render hone k baad Server finished video ko Client ko wapis stream karta hai.
+           - Client SHA-256 hash verify karta hai (zero packet corruption).
+           - Video automatically `client_downloads/` folder mai save ho jati hai.
+           - '▶️ Play Video' button active ho jata hai jo video player mai file chala deta hai,
+             aur '📂 Open Output Folder' se folder open ho jata hai!
+
+================================================================================
+
 

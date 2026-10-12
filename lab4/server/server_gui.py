@@ -19,15 +19,14 @@ from typing import Optional, Dict, Any, List
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
-# Add repository root to path
+# Add server directory to path for local imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-from lab4.server.network_server import RemoteWorkerServer
-from lab4.common.utils import get_all_local_ips, format_bytes, detect_system_capabilities
-from lab4.common.protocol import DEFAULT_PORT, PROTOCOL_VERSION
+from network_server import RemoteWorkerServer
+from utils import get_all_local_ips, format_bytes, detect_system_capabilities
+from protocol import DEFAULT_PORT, PROTOCOL_VERSION
 
 
 class ServerDashboardApp(ctk.CTk):
@@ -325,7 +324,7 @@ class ServerDashboardApp(ctk.CTk):
             width=70,
             height=22,
             fg_color="#475569",
-            hover_color="#334155",
+            hover_color="#374151",
             command=self._clear_logs
         )
         clear_btn.pack(side="right")

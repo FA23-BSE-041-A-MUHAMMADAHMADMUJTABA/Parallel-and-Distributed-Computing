@@ -168,47 +168,45 @@ Modern computational tasks such as **high-resolution video transcoding (H.264/HE
 ```text
 lab4/
 ├── README.md                            # Comprehensive Lab 04 Master Documentation
-├── concept.txt                          # Concise Concepts & Theoretical Guide (Roman Urdu & English)
-├── working.txt                          # Detailed Line-by-Line Code & Execution Working Guide
-├── requirements.txt                     # Python Dependencies (customtkinter, opencv, matplotlib)
+├── concept.txt                          # Detailed Concepts & Theoretical Guide (Urdu & English)
+├── working.txt                          # Detailed Line-by-Line Code Working Guide
+├── requirements.txt                     # Python Dependencies (customtkinter, opencv-python, numpy, imageio-ffmpeg)
+├── run_client.bat                       # 1-Click Client Launcher (Computer A)
+├── run_server.bat                       # 1-Click Server Launcher (Computer B)
 │
-├── client/                              # CLIENT APPLICATION SUBSYSTEM
-│   ├── client_gui.py                   # CustomTkinter Modern Desktop GUI
-│   ├── network_client.py               # Socket Client, Handshake, Ping, Streamer & Checksum
+├── client/                              # CLIENT APPLICATION (Computer A)
+│   ├── client_gui.py                   # Modern CustomTkinter GUI (CapCut/Clipchamp/Video Exports Browser)
+│   ├── network_client.py               # Socket Client, Handshake, File Transfer & Checksums
+│   ├── protocol.py                     # Framing Protocol, Headers & Opcodes
+│   ├── utils.py                        # SHA-256 Hasher, System Info & Formatting
 │   ├── benchmark.py                    # Local vs Remote Comparative Benchmark Runner
-│   ├── sample_assets/                  # Generated Test Video Assets
-│   └── client_downloads/               # Downloaded Rendered Output Assets
+│   ├── sample_project_task.py          # Heavy Simulation / Monte Carlo Offload Task
+│   ├── run_client.bat                  # Standalone Client Launcher for Computer A
+│   ├── sample_assets/                  # Sample Video Assets for Testing
+│   └── client_downloads/               # Received Rendered Videos & Server Logs
 │
-├── server/                              # SERVER WORKER SUBSYSTEM
-│   ├── server_daemon.py                # Server Daemon CLI Entrypoint
-│   ├── network_server.py               # Multi-Threaded Socket Server & Streamer
-│   ├── execution_engine.py             # FFmpeg NVENC GPU & CUDA Compute Engine
+├── server/                              # SERVER WORKER (Computer B)
+│   ├── server_gui.py                   # Modern CustomTkinter Server Monitor & Node Dashboard
+│   ├── server_daemon.py                # Console Daemon CLI Entrypoint (0.0.0.0:5000)
+│   ├── network_server.py               # Multi-Threaded Socket Server, Task Receiver & File Hub
+│   ├── execution_engine.py             # FFmpeg GPU NVENC / CPU Engine & Real-Time Log Generator
 │   ├── task_queue.py                   # Thread-Safe Task Queue Manager
-│   └── server_storage/                 # Remote Asset Storage & Transcoded Outputs
+│   ├── protocol.py                     # Framing Protocol, Headers & Opcodes
+│   ├── utils.py                        # Hardware Detection (NVENC/CUDA/CPU) & Hashers
+│   ├── run_server.bat                  # Standalone Server Launcher for Computer B
+│   └── server_storage/                 # Received Uploads & Rendered Outputs
 │
-├── common/                              # SHARED PROTOCOL & UTILITIES
-│   ├── protocol.py                     # Custom Framed Binary+JSON Framing Protocol
-│   └── utils.py                        # SHA-256 Hasher, System Prober & Synthetic Video Gen
-│
-├── config/                              # NETWORK CONFIGURATION
-│   ├── network_config.json             # Static IP, Port, Chunk Size & Timeout Specs
-│   └── static_ip_guide.md              # Step-by-Step Peer-to-Peer LAN Setup Guide
-│
-├── ss/                                  # LIVE EXECUTION SCREENSHOTS & REAL DEMO RECORDINGS
-│   ├── demo.mp4                         # Full High-Definition Live System Execution Video
-│   ├── demo.gif                         # Animated Live Demonstration Preview GIF
-│   ├── client_gui_initial.PNG           # Client GUI Launch Window (Disconnected)
-│   ├── client_gui_handshake.PNG         # Worker Online, Latency Ping & Spec Discovery
-│   ├── client_gui_progress.PNG          # Real-Time Progress Streaming (FPS, Speed & ETA)
-│   ├── client_gui_completed.PNG         # Finished Offload & SHA-256 Verified Badge
-│   └── server_terminal_execution.PNG    # Remote Server Daemon Terminal Execution Trace
-│
-└── benchmarks/                          # TASK 5 BENCHMARKING ASSETS & REPORTS
-    ├── benchmark_report.md             # Formal Mathematical & Technical Analysis Report
-    ├── generate_benchmark_plots.py     # Matplotlib Visualization Engine
-    ├── benchmark_data.json             # Empirical Measurement Records
-    ├── benchmark_execution_time.png    # Chart 1: Turnaround Time Comparison
-    └── benchmark_speedup_overhead.png  # Chart 2: Speedup vs Network Overhead
+└── ss/                                  # SCREENSHOTS, DIAGRAMS & DEMO RECORDINGS
+    ├── demo.mp4                         # Full High-Definition Live System Execution Video
+    ├── demo.gif                         # Animated Live Demonstration Preview GIF
+    ├── client_gui_initial.PNG           # Client GUI Launch Window (Disconnected)
+    ├── client_gui_handshake.PNG         # Worker Online, Latency Ping & Spec Discovery
+    ├── client_gui_progress.PNG          # Real-Time Progress Streaming (FPS, Speed & ETA)
+    ├── client_gui_completed.PNG         # Finished Offload & SHA-256 Verified Badge
+    ├── server_terminal_execution.PNG    # Remote Server Daemon Terminal Execution Trace
+    ├── server_B.jpeg                    # Computer B Server Node Live Photo
+    ├── benchmark_execution_time.png     # Chart 1: Turnaround Time Comparison
+    └── benchmark_speedup_overhead.png   # Chart 2: Speedup Factor vs Network Overhead
 ```
 
 ---
@@ -221,55 +219,77 @@ Install all required libraries into your Python environment:
 pip install -r lab4/requirements.txt
 ```
 
-### 1. Launching the Remote Worker Node (Server Computer B)
-You can launch the Server either via the **Modern GUI Dashboard** or the **Command-Line Daemon**:
+---
+
+### 🖥️ 1. Launching the Remote Worker Node (Server Computer B)
+You can launch the Server either via the **Dedicated GUI Dashboard** or the **Command-Line Daemon**:
 
 - **Option A: Modern Server GUI Dashboard (Recommended)**
-  Double-click `run_server_gui.bat` or run:
+  Double-click `run_server.bat` (select option 1) or run:
   ```bash
-  python lab4/server/server_gui.py
+  cd lab4/server
+  python server_gui.py
   ```
-  *Features: Auto-detects and displays your LAN IP to enter on Computer A, shows connected clients in real-time, monitors active task progress, hardware acceleration status, and provides a direct LAN file sharing hub.*
+  *Features: Auto-detects and displays your LAN IP to enter on Computer A, shows connected clients in real-time, monitors active task progress, hardware acceleration status.*
 
 - **Option B: Command-Line Daemon**
   Double-click `run_server.bat` (select option 2) or run:
   ```bash
-  python lab4/server/server_daemon.py --host 0.0.0.0 --port 5000
+  cd lab4/server
+  python server_daemon.py --host 0.0.0.0 --port 5000
   ```
 
 ---
 
-### 2. Launching the Client Desktop GUI (Client Computer A)
+### 💻 2. Launching the Client Desktop GUI (Client Computer A)
 Double-click `run_client.bat` or run:
 ```bash
-python lab4/client/client_gui.py
+cd lab4/client
+python client_gui.py
 ```
 
-**Operating Steps**:
+#### 🎬 Third-Party Video Editor Integration Workflow (CapCut / Clipchamp / Premiere / etc.):
 1. **Connect & Handshake**: Enter Server B's IP address (shown on Server GUI, e.g. `192.168.1.20`) and Port `5000`. Click **"⚡ Handshake & Ping"**.
-   - **Prominent Feedback**: A connection modal pops up confirming: Server hostname, CPU core count, GPU acceleration status, and round-trip ping latency.
-   - **Server Display**: Server GUI automatically alerts with incoming client IP, client ID, and increments active clients counter.
-2. **Distribute Complex Project Tasks**:
-   - Select Task Mode: **"Complex Project Python Script / Heavy Workload"**.
-   - Select your project script or click **"✨ Gen Script"** (generates multi-stage Monte Carlo, Matrix tensor operations, and prime sieve simulation).
-   - Click **"🚀 Offload Task to Remote Worker (Computer B)"**.
-   - Real-time stdout from the server process streams directly into your client log console!
-   - Result summary artifact JSON is downloaded with SHA-256 integrity verification.
-3. **Peer-to-Peer LAN File Sharing (Without Internet)**:
-   - Switch to the **"📁 LAN File Sharing Hub"** tab.
-   - Click **"📤 Upload File to Server"** to share any file directly to Server B.
-   - Click **"🔄 Refresh Server Files"** to view all files stored on Server B.
-   - Click **"📥 Download from Server"** to download any file to Computer A.
-
+   - A modal confirms connection, server hostname, CPU core count, GPU acceleration status, and round-trip ping latency.
+2. **Select Video Exports Folder**:
+   - In Section 2, click **"📂 Browse Folder"** and select ANY destination folder where CapCut, Clipchamp, or any other editor saved your video exports.
+   - The GUI scans the folder and lists all video files found with file sizes and timestamps.
+   - Select the video from the list (or click **"📄 Browse File"** for any single video file).
+3. **Configure Server-Side Render Options**:
+   - Resolution: `1920x1080` (FHD), `1280x720` (HD), `854x480` (SD), `3840x2160` (4K), or `original`.
+   - Bitrate: `1500k`, `3000k`, `5000k`, `8000k`, `12000k`.
+   - Preset: `ultrafast`, `fast`, `medium`, `slow`, `p4`.
+   - Acceleration Mode: `auto`, `nvenc` (NVIDIA GPU), or `cpu`.
+   - Visual Filter: `none`, `grayscale`, `sepia`, `mirror`, `blur`, `speed_2x`.
+   - Frame Rate: `original`, `24 fps`, `30 fps`, `60 fps`.
+4. **Offload & Remote Hardware Rendering**:
+   - Click **"🚀 Send Video to Server for Rendering (Computer B)"**.
+   - Input video is SHA-256 hashed and streamed over TCP in 64 KB chunks.
+   - Server renders with hardware acceleration while streaming real-time progress (`FPS`, `Speed`, `%`, `ETA`) back to client.
+   - Server creates a comprehensive execution log file detailing hardware specs, commands, and encoding milestones.
+5. **Auto-Download Rendered Video & Execution Logs**:
+   - Server streams the rendered master video AND the execution log file back to the client.
+   - Client verifies SHA-256 checksums to ensure zero corruption.
+   - Files are saved in `client_downloads/`.
+   - Click **"▶️ Play Video"** to watch the rendered output.
+   - Click **"📄 View Logs"** to inspect full server rendering logs!
 
 ---
 
-### 3. Running the Automated Performance Benchmark (Task 5)
-You can run the benchmark directly from the GUI by clicking **"📈 Benchmark (Local vs Remote)"**, or via the command line:
+### 📁 3. Peer-to-Peer LAN File Sharing (Without Internet)
+- Switch to the **"📁 LAN File Sharing Hub"** tab.
+- Click **"📤 Upload File to Server"** to share any file directly with Computer B.
+- Click **"🔄 Refresh Server Files"** to view all files stored on Computer B.
+- Click **"📥 Download from Server"** to download any file to Computer A.
+
+---
+
+### 📈 4. Running the Automated Performance Benchmark (Task 5)
+Run the benchmark directly via:
 ```bash
 python lab4/client/benchmark.py --host 127.0.0.1 --port 5000
 ```
-*This executes comparative transcoding tests across 480p, 720p, and 1080p, records timings, computes speedup and network overhead, and renders publication-grade charts in `lab4/benchmarks/`.*
+*This executes comparative transcoding tests across 480p, 720p, and 1080p, records timings, computes speedup and network overhead, and renders publication-grade charts.*
 
 ---
 
@@ -277,14 +297,12 @@ python lab4/client/benchmark.py --host 127.0.0.1 --port 5000
 
 For a direct peer-to-peer Ethernet connection between the client laptop and server worker node:
 
-| Parameter | Remote Worker Node | Client Laptop |
+| Parameter | Remote Worker Node (Computer B) | Client Laptop (Computer A) |
 | :--- | :--- | :--- |
 | **Static IPv4 Address** | `192.168.1.1` | `192.168.1.2` |
 | **Subnet Mask** | `255.255.255.0` | `255.255.255.0` |
 | **Default Gateway** | *None* | `192.168.1.1` |
 | **Firewall Exception** | Allow Inbound TCP Port `5000` | Outbound Allowed by Default |
-
-*Refer to [config/static_ip_guide.md](./config/static_ip_guide.md) for Windows 10/11 GUI and PowerShell instructions.*
 
 ---
 
@@ -301,12 +319,12 @@ For a direct peer-to-peer Ethernet connection between the client laptop and serv
 ---
 
 ### Benchmark Plot 1: Turnaround Time Comparison (Local vs Remote Stacks)
-![Turnaround Time Breakdown](./benchmarks/benchmark_execution_time.png)
+![Turnaround Time Breakdown](./ss/benchmark_execution_time.png)
 
 ---
 
 ### Benchmark Plot 2: Speedup Factor & Network Transfer Overhead
-![Speedup Factor and Overhead](./benchmarks/benchmark_speedup_overhead.png)
+![Speedup Factor and Overhead](./ss/benchmark_speedup_overhead.png)
 
 ---
 

@@ -15,14 +15,13 @@ import argparse
 import subprocess
 from typing import Dict, Any, List, Optional, Callable
 
-# Add repository root to path
+# Add current directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
-from lab4.client.network_client import OffloadingClient
-from lab4.common.utils import get_ffmpeg_binary, generate_sample_video, format_time, format_bytes
+from network_client import OffloadingClient
+from utils import get_ffmpeg_binary, generate_sample_video, format_time, format_bytes
 
 
 def execute_local_transcode(input_file: str, output_file: str, resolution: str, bitrate: str = "3000k") -> float:
@@ -38,17 +37,119 @@ def execute_local_transcode(input_file: str, output_file: str, resolution: str, 
         ffmpeg_exe, "-y",
         "-i", input_file,
         "-c:v", "libx264",
-        "-preset", "slow",     # Resource-constrained client simulation
-        "-threads", "1",       # Simulates single-threaded or low-power laptop client
+        "-preset", "ultrafast",
         "-b:v", bitrate,
+        "-threads", "1",
         *vf_arg,
-        "-c:a", "aac",
+        "-c:a", "copy",
         output_file
     ]
 
     t_start = time.time()
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if res.returncode != 0:
+        cmd_fallback = [ffmpeg_exe, "-y", "-i", input_file, *vf_arg, output_file]
+        subprocess.run(cmd_fallback, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     return time.time() - t_start
+
+
+def generate_plots_from_data(data: dict, output_dir: str):
+    """
+    Renders two high-resolution analytical plots:
+    1. Execution Time Breakdown (Local vs Remote Stacks)
+    2. Speedup Factor & Network Overhead vs Resolution
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        print("[!] Matplotlib not installed, skipping chart rendering.")
+        return None, None
+
+    os.makedirs(output_dir, exist_ok=True)
+    records = data["records"]
+
+    labels = [r["configuration"] for r in records]
+    t_local = [r["t_local_sec"] for r in records]
+    t_upload = [r["t_upload_sec"] for r in records]
+    t_compute = [r["t_remote_compute_sec"] for r in records]
+    t_download = [r["t_download_sec"] for r in records]
+    t_remote_total = [r["t_remote_total_sec"] for r in records]
+    speedups = [r["speedup_factor"] for r in records]
+    overheads = [r["network_overhead_pct"] for r in records]
+
+    plt.rcParams["font.family"] = "sans-serif"
+    plt.rcParams["font.size"] = 10
+
+    # CHART 1: Comparative Execution Time Breakdown
+    fig, ax = plt.subplots(figsize=(9, 5.5), dpi=300)
+    x = np.arange(len(labels))
+    width = 0.35
+
+    bars1 = ax.bar(x - width/2, t_local, width, label="Local Client Execution (T_local)", color="#ef4444", edgecolor="#991b1b")
+    bars_up = ax.bar(x + width/2, t_upload, width, label="Network Upload (T_upload)", color="#3b82f6", edgecolor="#1d4ed8")
+    bars_comp = ax.bar(x + width/2, t_compute, width, bottom=t_upload, label="Remote Engine Compute (T_remote)", color="#10b981", edgecolor="#047857")
+    bottom_dl = [u + c for u, c in zip(t_upload, t_compute)]
+    bars_dl = ax.bar(x + width/2, t_download, width, bottom=bottom_dl, label="Network Download (T_download)", color="#f59e0b", edgecolor="#b45309")
+
+    for i, v in enumerate(t_local):
+        ax.text(i - width/2, v + 0.1, f"{v:.2f}s", ha="center", va="bottom", fontsize=9, fontweight="bold", color="#991b1b")
+    for i, v in enumerate(t_remote_total):
+        ax.text(i + width/2, v + 0.1, f"{v:.2f}s", ha="center", va="bottom", fontsize=9, fontweight="bold", color="#065f46")
+
+    ax.set_title("CSC-334: Local Client vs Remote Offloading Turnaround Time", fontsize=13, fontweight="bold", pad=14)
+    ax.set_xlabel("Workload Resolution / Configuration", fontweight="bold", labelpad=8)
+    ax.set_ylabel("Turnaround Time (Seconds) - Lower is Better", fontweight="bold", labelpad=8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontweight="bold")
+    ax.legend(frameon=True, facecolor="#f8fafc", loc="upper left")
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+    plot1_path = os.path.join(output_dir, "benchmark_execution_time.png")
+    plt.tight_layout()
+    plt.savefig(plot1_path)
+    plt.close()
+
+    # CHART 2: Speedup Factor & Network Overhead Dual Plot
+    fig, ax1 = plt.subplots(figsize=(9, 5.5), dpi=300)
+
+    color_speedup = "#8b5cf6"
+    color_overhead = "#f97316"
+
+    ax1.set_title("CSC-334: Speedup Factor vs Network Transfer Overhead", fontsize=13, fontweight="bold", pad=14)
+    ax1.set_xlabel("Workload Resolution / Configuration", fontweight="bold", labelpad=8)
+    ax1.set_ylabel("Speedup Factor (S = T_local / T_remote)", color=color_speedup, fontweight="bold", labelpad=8)
+    
+    line1 = ax1.plot(labels, speedups, marker="o", markersize=8, linewidth=2.5, color=color_speedup, label="Speedup Factor (x)")
+    for i, txt in enumerate(speedups):
+        ax1.annotate(f"{txt:.2f}x", (labels[i], speedups[i]), textcoords="offset points", xytext=(0, 10), ha="center", fontweight="bold", color=color_speedup)
+    
+    ax1.tick_params(axis="y", labelcolor=color_speedup)
+    ax1.set_ylim(0, max(speedups) * 1.35 if speedups else 5)
+    ax1.grid(True, linestyle="--", alpha=0.5)
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("Network Overhead (%)", color=color_overhead, fontweight="bold", labelpad=8)
+    line2 = ax2.plot(labels, overheads, marker="s", markersize=8, linewidth=2.5, linestyle="--", color=color_overhead, label="Network Overhead (%)")
+    for i, txt in enumerate(overheads):
+        ax2.annotate(f"{txt:.1f}%", (labels[i], overheads[i]), textcoords="offset points", xytext=(0, -18), ha="center", fontweight="bold", color=color_overhead)
+    
+    ax2.tick_params(axis="y", labelcolor=color_overhead)
+    ax2.set_ylim(0, 100)
+
+    lines = line1 + line2
+    labels_legend = [l.get_label() for l in lines]
+    ax1.legend(lines, labels_legend, loc="upper right", frameon=True, facecolor="#f8fafc")
+
+    plot2_path = os.path.join(output_dir, "benchmark_speedup_overhead.png")
+    plt.tight_layout()
+    plt.savefig(plot2_path)
+    plt.close()
+
+    return plot1_path, plot2_path
 
 
 def run_comparative_benchmark(
@@ -69,7 +170,8 @@ def run_comparative_benchmark(
             log_fn(msg)
         print(msg)
 
-    benchmark_dir = os.path.join(parent_dir, "lab4", "benchmarks")
+    # Use self-contained benchmark directory inside client folder
+    benchmark_dir = os.path.join(current_dir, "benchmark_results")
     os.makedirs(benchmark_dir, exist_ok=True)
 
     # 1. Ensure test asset exists
@@ -176,7 +278,6 @@ def run_comparative_benchmark(
 
     # Generate charts
     try:
-        from lab4.benchmarks.generate_benchmark_plots import generate_plots_from_data
         generate_plots_from_data(summary_data, output_dir=benchmark_dir)
         log(f"[*] High-resolution comparison plots saved to {benchmark_dir}")
     except Exception as e:

@@ -1,6 +1,6 @@
 @echo off
-title CSC-334 Remote Worker Node (Computer B)
-cd /d "%~dp0.."
+title CSC-334: Remote Worker Server Node (Computer B)
+cd /d "%~dp0server"
 echo ======================================================================
 echo   CSC-334: REMOTE WORKER SERVER NODE (COMPUTER B)
 echo ======================================================================
@@ -10,9 +10,9 @@ echo ======================================================================
 set /p choice="Select Option [1 or 2] (Default 1): "
 if "%choice%"=="2" (
     echo Starting Server CLI Daemon on 0.0.0.0:5000...
-    python -u lab4/server/server_daemon.py --host 0.0.0.0 --port 5000
+    python -u server_daemon.py --host 0.0.0.0 --port 5000
 ) else (
     echo Starting Modern Server GUI Dashboard...
-    python lab4/server/server_gui.py
+    python server_gui.py
 )
 pause

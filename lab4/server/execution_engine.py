@@ -14,17 +14,25 @@ import time
 import json
 import subprocess
 from typing import Dict, Any, Callable, Optional
+
+# Local imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 try:
-    from ..common.utils import get_ffmpeg_binary, detect_system_capabilities
-except (ImportError, ValueError):
-    from lab4.common.utils import get_ffmpeg_binary, detect_system_capabilities
+    from utils import get_ffmpeg_binary, detect_system_capabilities, compute_sha256, format_bytes
+except ImportError:
+    from .utils import get_ffmpeg_binary, detect_system_capabilities, compute_sha256, format_bytes
 
 
 class RemoteExecutionEngine:
     """
     Executes heavy offloaded computational and rendering workloads:
     - GPU-accelerated video rendering via FFmpeg NVENC (with CPU libx264 fallback)
+    - Full execution logging saved to disk and streamed to client
     - CUDA / Parallel Matrix Tensor Compute workloads
+    - Custom multi-stage scientific / project script execution
     """
     def __init__(self):
         self.sys_info = detect_system_capabilities()
@@ -42,28 +50,62 @@ class RemoteExecutionEngine:
         """
         Transcodes video asset using NVENC hardware acceleration if supported,
         falling back to multi-threaded CPU libx264.
-        Streams real-time progress percentages and stats.
+        Streams real-time progress percentages and generates a detailed server render log.
         """
         start_time = time.time()
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        log_path = output_path.rsplit(".", 1)[0] + "_render_log.txt"
+
+        log_events = []
+        def log_event(text: str):
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            entry = f"[{timestamp}] {text}"
+            log_events.append(entry)
+
+        log_event("=" * 70)
+        log_event("CSC-334: REMOTE VIDEO RENDERING ENGINE EXECUTION LOG")
+        log_event("=" * 70)
+        log_event(f"Server Node Hostname : {self.sys_info.get('hostname', 'Unknown')}")
+        log_event(f"Operating System     : {self.sys_info.get('os', 'Unknown')}")
+        log_event(f"CPU Physical / Logic : {self.sys_info.get('cpu_count', 'Unknown')} Cores")
+        log_event(f"GPU / NVENC Hardware : {self.sys_info.get('nvenc_status', 'N/A')}")
+        log_event(f"FFmpeg Binary Path   : {self.ffmpeg_exe}")
+        log_event("-" * 70)
 
         # 1. Probe input video duration & specs
         duration = self._probe_video_duration(input_path)
         if duration <= 0:
             duration = 10.0  # Fallback duration estimate
 
+        in_size = os.path.getsize(input_path) if os.path.exists(input_path) else 0
+        in_sha256 = compute_sha256(input_path) if in_size > 0 else "N/A"
+        log_event(f"Input Video Source   : {input_path}")
+        log_event(f"Input File Size      : {format_bytes(in_size)} ({in_size:,} bytes)")
+        log_event(f"Input SHA-256 Hash   : {in_sha256}")
+        log_event(f"Probed Video Duration: {duration:.2f} seconds")
+
         # 2. Extract configuration parameters
-        resolution = config.get("resolution", "original")  # e.g. "1920x1080", "1280x720", "854x480"
+        resolution = config.get("resolution", "original")  # e.g. "1920x1080", "1280x720"
         bitrate = config.get("bitrate", "3000k")
         preset = config.get("preset", "fast")
         force_mode = config.get("mode", "auto")  # "auto", "nvenc", "cpu"
+        filter_effect = config.get("filter", "none")
+        fps_val = str(config.get("fps", "original"))
+
+        log_event("-" * 70)
+        log_event("RENDER CONFIGURATION PARAMETERS:")
+        log_event(f"• Target Resolution  : {resolution}")
+        log_event(f"• Target Bitrate     : {bitrate}")
+        log_event(f"• Encoding Preset    : {preset}")
+        log_event(f"• Acceleration Mode  : {force_mode}")
+        log_event(f"• Visual Filter      : {filter_effect}")
+        log_event(f"• Target Frame Rate  : {fps_val}")
 
         # Determine codec
         use_nvenc = False
         if force_mode == "nvenc" or (force_mode == "auto" and self.nvenc_available):
             use_nvenc = True
             codec = "h264_nvenc"
-            # Map presets for NVENC if needed (p1 to p7 or standard)
             nvenc_preset = "p4" if preset in ["medium", "default"] else ("p1" if preset == "ultrafast" else "p5")
             encoder_args = ["-c:v", codec, "-preset", nvenc_preset, "-b:v", str(bitrate)]
         else:
@@ -75,7 +117,6 @@ class RemoteExecutionEngine:
         if resolution != "original" and "x" in resolution:
             vf_filters.append(f"scale={resolution}")
 
-        filter_effect = config.get("filter", "none")
         if filter_effect == "grayscale":
             vf_filters.append("format=gray")
         elif filter_effect == "sepia":
@@ -91,12 +132,10 @@ class RemoteExecutionEngine:
         if vf_filters:
             vf_args = ["-vf", ",".join(vf_filters)]
 
-        fps_val = str(config.get("fps", "original"))
         if fps_val != "original":
             clean_fps = fps_val.replace(" fps", "").strip()
             vf_args.extend(["-r", clean_fps])
 
-        # Build FFmpeg command with progress pipe
         cmd = [
             self.ffmpeg_exe, "-y",
             "-loglevel", "error",
@@ -109,9 +148,12 @@ class RemoteExecutionEngine:
             output_path
         ]
 
-        acceleration_label = "NVIDIA NVENC (GPU)" if use_nvenc else "Multi-Threaded CPU (libx264)"
+        acceleration_label = "NVIDIA NVENC (GPU Hardware)" if use_nvenc else "Multi-Threaded CPU (libx264)"
+        log_event(f"Assigned Engine      : {acceleration_label}")
+        log_event(f"FFmpeg Shell Command : {' '.join(cmd)}")
+        log_event("-" * 70)
+        log_event("ENCODING EXECUTION TIMELINE & PROGRESS STREAM:")
 
-        # Spawn FFmpeg process with stderr=subprocess.PIPE to capture error diagnostics safely
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -123,13 +165,14 @@ class RemoteExecutionEngine:
 
         current_fps = 0.0
         current_speed = "1.0x"
-        out_time_ms = 0
+        last_logged_pct = -10.0
 
-        # Read progress output line-by-line
         try:
             for line in process.stdout:
                 if check_cancelled and check_cancelled():
                     process.kill()
+                    log_event("[ABORT] Rendering cancelled by client request.")
+                    self._save_log_file(log_path, log_events)
                     return {"success": False, "error": "Task cancelled by client"}
 
                 line = line.strip()
@@ -148,8 +191,13 @@ class RemoteExecutionEngine:
                         time_us = int(line.split("=")[1])
                         out_time_sec = time_us / 1_000_000.0
                         percent = min(99.0, (out_time_sec / duration) * 100.0)
-                        eta = max(0.0, (duration - out_time_sec) / (float(current_speed.replace("x", "")) if "x" in current_speed and current_speed != "N/A" and float(current_speed.replace("x", "") or 1) > 0 else 1.0))
-                        
+                        speed_mult = float(current_speed.replace("x", "")) if "x" in current_speed and current_speed != "N/A" and float(current_speed.replace("x", "") or 1) > 0 else 1.0
+                        eta = max(0.0, (duration - out_time_sec) / speed_mult)
+
+                        if percent - last_logged_pct >= 10.0 or percent >= 98.0:
+                            log_event(f"Progress: {percent:5.1f}% | Encoded: {out_time_sec:5.1f}s / {duration:5.1f}s | Speed: {current_speed} | FPS: {current_fps:4.1f} | ETA: {eta:4.1f}s")
+                            last_logged_pct = percent
+
                         if progress_callback:
                             progress_callback(
                                 percent,
@@ -161,15 +209,17 @@ class RemoteExecutionEngine:
                     except (ValueError, ZeroDivisionError):
                         pass
                 elif line == "progress=end":
+                    log_event("Progress: 100.0% | FFmpeg reported stream completion.")
                     if progress_callback:
                         progress_callback(100.0, current_fps, current_speed, 0.0, "Encoding Complete")
 
             process.wait()
         except Exception as e:
             process.kill()
+            log_event(f"[EXCEPTION] Runtime error during encoding: {e}")
+            self._save_log_file(log_path, log_events)
             raise e
 
-        # Safely read stderr diagnostic if available
         stderr_out = ""
         if process.stderr:
             try:
@@ -177,28 +227,65 @@ class RemoteExecutionEngine:
             except Exception:
                 stderr_out = ""
 
-        # If NVENC failed because host lacks GPU, retry automatically with CPU fallback
+        # Auto fallback if NVENC fails
         if process.returncode != 0 and use_nvenc:
             if "Cannot load nvcuda.dll" in stderr_out or "Error while opening encoder" in stderr_out or "Unknown encoder" in stderr_out:
+                log_event("[WARNING] NVENC hardware encoder unavailable. Switching to Multi-threaded CPU fallback...")
                 if progress_callback:
                     progress_callback(0.0, 0.0, "1.0x", 0.0, "NVENC unavailable on host. Retrying with CPU fallback...")
                 config["mode"] = "cpu"
                 return self.execute_video_transcode(input_path, output_path, config, progress_callback, check_cancelled)
             else:
+                log_event(f"[ERROR] FFmpeg error: {stderr_out}")
+                self._save_log_file(log_path, log_events)
                 return {"success": False, "error": f"FFmpeg error: {stderr_out[:200] if stderr_out else 'Encoding failed'}"}
 
         if process.returncode != 0:
+            log_event(f"[ERROR] Process exited with code {process.returncode}: {stderr_out}")
+            self._save_log_file(log_path, log_events)
             return {"success": False, "error": f"FFmpeg execution failed (code {process.returncode}): {stderr_out[:200] if stderr_out else 'Execution error'}"}
 
         total_duration = time.time() - start_time
+        out_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        out_sha256 = compute_sha256(output_path) if out_size > 0 else "N/A"
+        compression_ratio = ((in_size - out_size) / in_size * 100.0) if in_size > 0 else 0.0
+
+        log_event("-" * 70)
+        log_event("RENDER EXECUTION RESULTS & INTEGRITY METRICS:")
+        log_event(f"• Execution Status   : SUCCESS (Return Code 0)")
+        log_event(f"• Render Duration    : {total_duration:.3f} seconds")
+        log_event(f"• Average Speed Factor: {current_speed}")
+        log_event(f"• Output File Path   : {output_path}")
+        log_event(f"• Output File Size   : {format_bytes(out_size)} ({out_size:,} bytes)")
+        log_event(f"• Size Delta Ratio   : {compression_ratio:+.1f}%")
+        log_event(f"• Output SHA-256 Hash: {out_sha256}")
+        log_event("=" * 70)
+        log_event("END OF LOG - Video asset rendered and verified for transmission back to client.")
+        log_event("=" * 70)
+
+        logs_content = "\n".join(log_events)
+        self._save_log_file(log_path, log_events)
+
         return {
             "success": True,
             "engine": acceleration_label,
             "duration": total_duration,
             "resolution": resolution,
             "bitrate": bitrate,
-            "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            "output_size": out_size,
+            "output_sha256": out_sha256,
+            "log_path": log_path,
+            "log_file_name": os.path.basename(log_path),
+            "logs_text": logs_content
         }
+
+    def _save_log_file(self, log_path: str, lines: list):
+        """Writes execution events list to disk log file."""
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            pass
 
     def execute_cuda_compute(
         self,
@@ -208,10 +295,7 @@ class RemoteExecutionEngine:
         progress_callback: Optional[Callable[[float, float, str, float, str], None]] = None,
         check_cancelled: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
-        """
-        Executes intensive parallel matrix tensor computations (Monte Carlo / Matrix SVD / Multiplication).
-        Uses PyTorch CUDA when available, with optimized vectorized NumPy parallel fallback.
-        """
+        """Executes intensive parallel matrix tensor computations."""
         import numpy as np
 
         start_time = time.time()
@@ -237,13 +321,11 @@ class RemoteExecutionEngine:
 
             iter_start = time.time()
             if use_torch and torch_mod is not None:
-                # GPU Tensor Matrix Multiplication
                 a = torch_mod.randn(matrix_size, matrix_size, device="cuda")
                 b = torch_mod.randn(matrix_size, matrix_size, device="cuda")
                 c = torch_mod.matmul(a, b)
                 trace_val = float(torch_mod.trace(c).cpu())
             else:
-                # High-performance NumPy Matrix Multiplication
                 a = np.random.randn(matrix_size, matrix_size).astype(np.float32)
                 b = np.random.randn(matrix_size, matrix_size).astype(np.float32)
                 c = np.dot(a, b)
@@ -266,8 +348,6 @@ class RemoteExecutionEngine:
                 )
 
         total_duration = time.time() - start_time
-        
-        # Write computation summary to output file
         summary = {
             "task_type": "cuda_compute",
             "engine": engine_name,
@@ -301,7 +381,6 @@ class RemoteExecutionEngine:
         except Exception:
             pass
 
-        # Fallback ffprobe command
         try:
             cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -320,18 +399,13 @@ class RemoteExecutionEngine:
         progress_callback: Optional[Callable[[float, float, str, float, str], None]] = None,
         check_cancelled: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
-        """
-        Executes an offloaded custom Python project script or heavy computation workload
-        on this remote worker node using server CPU cores & memory.
-        Streams real-time console stdout directly back to the client.
-        """
+        """Executes an offloaded custom Python project script."""
         start_time = time.time()
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
         if not os.path.exists(script_path):
             return {"success": False, "error": f"Script not found: {script_path}"}
 
-        # Build execution command using current Python interpreter
         cmd = [sys.executable, script_path, output_path]
         extra_args = config.get("args", [])
         if isinstance(extra_args, list):
@@ -366,7 +440,6 @@ class RemoteExecutionEngine:
                 all_logs.append(clean_line)
                 line_count += 1
 
-                # Parse standardized [PROGRESS] markers if script outputs them
                 if "[PROGRESS]" in clean_line:
                     try:
                         part = clean_line.split("[PROGRESS]")[1].strip()
@@ -378,7 +451,6 @@ class RemoteExecutionEngine:
                         if progress_callback:
                             progress_callback(current_pct, float(line_count), "Active", 0.0, clean_line)
                 else:
-                    # Incrementally bump progress up to 90% for general scripts
                     current_pct = min(92.0, current_pct + 1.5)
                     if progress_callback:
                         progress_callback(current_pct, float(line_count), "Active", 0.0, clean_line[:60])
@@ -394,7 +466,6 @@ class RemoteExecutionEngine:
             err_summary = "\n".join(all_logs[-10:]) if all_logs else f"Exited with code {process.returncode}"
             return {"success": False, "error": f"Script failed (exit code {process.returncode}): {err_summary}"}
 
-        # If output file wasn't created by script itself, write stdout summary
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             summary_data = {
                 "task_type": "custom_script",

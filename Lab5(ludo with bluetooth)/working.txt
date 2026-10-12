@@ -1,0 +1,52 @@
+================================================================================
+CSC-334: PARALLEL AND DISTRIBUTED COMPUTING - LAB 05
+WORKING GUIDE: ALL-IN-ONE BLUETOOTH OFFLINE LUDO MULTIPLAYER
+================================================================================
+Student Name    : Muhammad Ahmad Mujtaba
+Registration No : FA23-BSE-041
+Class & Section : BSE 7A (Software Engineering)
+Course          : CSC-334 Parallel and Distributed Computing
+Lab Title       : Lab 05 - Distributed Multiplayer Ludo with Bluetooth Offline Networking
+================================================================================
+
+1. YEH SYSTEM KIYA HAI?
+- Flutter / Dart k `main.dart` se pura Ludo game Python mai 1 SINGLE FILE (`ludo.py`)
+  mai convert kiya gaya hai jo COMPUTER, LAPTOP, aur MOBILE PHONE (Android / iOS)
+  teeno par bina kisi installation ya external package (`pip install`) k chalti hai.
+- Yeh system 100% OFFLINE BLUETOOTH par kaam karta hai (Zero Internet Required).
+
+2. DESK MANAGEMENT & CODE SYSTEM:
+- Option A: "Create New Desk (Host / Leader)"
+  - Leader apna naam likh kar desk banata hai.
+  - Desk bante hi aik unique 4-digit Desk Code (e.g. 7429) generate hota hai.
+  - Yeh code screen k TOP-RIGHT CORNER mai permanently display hota hai.
+  - Leader ko automatically Player 1 (Red) color assign hota hai.
+- Option B: "Join Desk"
+  - Doosra ya teesra player 'Join Desk' par click karta hai aur Leader ka Desk Code enter karta hai.
+  - Woh foran desk lobby mai enter ho jata hai aur use agla color (Green / Yellow / Blue) assign hota hai.
+- Rule: "Leader he start kr sky game min 2 players hon":
+  - Game start karne ka button sirf LEADER k paas visible hota hai.
+  - Jab tak kam az kam 2 players desk mai na hon, Start Game button disabled rehta hai.
+  - Leader k start karte hi sabhi screens aik sath synchronize ho kar board view mai chali jati hain.
+
+3. MOBILE AUR COMPUTER PAR CHALANE KA TAREEQA:
+- Computer / Laptop:
+  - `run_ludo.bat` par double-click karein ya `python ludo.py` chalayein.
+  - Browser automatically game open kar dega (`http://localhost:8080`).
+- Mobile Phone:
+  - Laptop aur Mobile ko Bluetooth se pair karein aur Bluetooth Tethering enable karein.
+  - Mobile phone k browser mai Laptop ka Bluetooth IP open karein (e.g. `http://<IP>:8080`).
+  - Mobile par touch controls k sath bina kuch install kiye Ludo chal padega!
+  - Ya phone mai Pydroid 3 / Termux se direct `python ludo.py` run karein.
+
+4. AUTHENTIC LUDO LOGICS (100% PRESERVED):
+- 15x15 Board Grid: Exactly 225 cells.
+- Player Paths: Red, Green, Yellow, Blue ka exact 52-step track aur 5-step home stretch.
+- Safe Squares: Entry squares aur stars (91, 23, 133, 201, 36, 102, 188, 122).
+- Dice: 1 se 6 random roll.
+- 6 nikalne par token home yard se bahar nikalta hai.
+- 3 consecutive sixes par turn skip ho jata hai.
+- Blockade: Agar aik square par opponent k 2 ya zyada tokens hon to wahan se guzar nahi sakte.
+- Capture: Non-safe square par single opponent token par aane se opponent ka token home yard wapis chala jata hai aur player ko BONUS TURN milta hai.
+- Victory: Jis player k 4 tokens sab se pehle home (pos 56) pohanchen, woh jeet jata hai!
+================================================================================

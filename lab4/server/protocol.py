@@ -2,7 +2,7 @@
 ================================================================================
 CSC-334: Parallel and Distributed Computing
 Lab 4: Custom Distributed Task Offloading & Remote GPU Rendering System
-Module: common/protocol.py
+Module: server/protocol.py
 Description: Robust Binary + JSON Socket Framing Protocol for Task Offloading.
 ================================================================================
 """

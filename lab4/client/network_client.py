@@ -15,11 +15,11 @@ import hashlib
 import uuid
 from typing import Dict, Any, Tuple, Optional, Callable
 
-from ..common.protocol import (
+from protocol import (
     MsgType, send_packet, send_json, read_packet, read_json,
     CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION
 )
-from ..common.utils import compute_sha256, format_bytes
+from utils import compute_sha256, format_bytes
 
 
 class OffloadingClient:
@@ -243,6 +243,45 @@ class OffloadingClient:
         # Validate download integrity
         checksum_verified = (computed_out_sha256.lower() == expected_out_sha256.lower()) if expected_out_sha256 else True
 
+        # 5. Download Server Execution Log File
+        log_filename = result_payload.get("log_file_name", "")
+        server_logs_text = result_payload.get("logs_text", "")
+        local_log_path = ""
+
+        if log_filename:
+            local_log_path = os.path.join(output_dir, log_filename)
+            try:
+                if progress_callback:
+                    progress_callback({"status": "Downloading server execution logs...", "percent": 100.0})
+                send_json(self.sock, MsgType.DOWNLOAD_REQ, {"task_id": task_id, "file_name": log_filename})
+                msg_type, log_ack = read_json(self.sock)
+                with open(local_log_path, "wb") as f:
+                    while True:
+                        c_type, c_data = read_packet(self.sock)
+                        if c_type == MsgType.FILE_CHUNK:
+                            f.write(c_data)
+                        elif c_type == MsgType.FILE_EOF:
+                            break
+                if not server_logs_text and os.path.exists(local_log_path):
+                    with open(local_log_path, "r", encoding="utf-8", errors="ignore") as f:
+                        server_logs_text = f.read()
+            except Exception:
+                # If downloading log file had any network issue, write text directly if available
+                if server_logs_text:
+                    try:
+                        with open(local_log_path, "w", encoding="utf-8") as f:
+                            f.write(server_logs_text)
+                    except Exception:
+                        pass
+        elif server_logs_text:
+            # Generate local log file if server provided text
+            local_log_path = os.path.join(output_dir, f"out_{task_id}_render_log.txt")
+            try:
+                with open(local_log_path, "w", encoding="utf-8") as f:
+                    f.write(server_logs_text)
+            except Exception:
+                pass
+
         total_turnaround_time = upload_duration + remote_compute_duration + download_duration
         network_overhead_time = upload_duration + download_duration
 
@@ -251,6 +290,8 @@ class OffloadingClient:
             "task_id": task_id,
             "engine": result_payload.get("engine", "Remote Worker"),
             "local_output_path": local_output_path,
+            "local_log_path": local_log_path,
+            "server_logs_text": server_logs_text,
             "input_file_size": file_size,
             "output_file_size": os.path.getsize(local_output_path),
             "upload_duration_sec": round(upload_duration, 3),
@@ -519,4 +560,3 @@ class OffloadingClient:
                     break
 
         return dest_path
-

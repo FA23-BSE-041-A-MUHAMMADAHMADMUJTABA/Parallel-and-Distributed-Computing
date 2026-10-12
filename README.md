@@ -35,6 +35,7 @@ This repository contains the practical laboratory implementations, conceptual gu
 | **Lab 02** | **Socket Programming: Variable-Length Framing** | • TCP Byte-Stream Nature<br>• Head-of-Line Blocking Solution<br>• Length-Prefix Framing (`zfill(3)`)<br>• Custom `recvall()` implementation | [📂 `lab2/`](./lab2/) | ✅ Completed |
 | **Lab 03** | **Multi-Threaded TCP Server & Client** | • Multi-Threading via `threading.Thread`<br>• Simultaneous Multi-Client Handling<br>• Thread Synchronization (`threading.Lock`)<br>• Explicit `acquire()` & `release()`<br>• Real-time Thread/IP/Port Terminal Output | [📂 `lab3/`](./lab3/) | ✅ Completed |
 | **Lab 04** | **Custom Distributed Task Offloading & Remote GPU Rendering** | • Peer-to-Peer LAN / Wi-Fi Offloading<br>• Binary+JSON Socket Protocol & Ping Check<br>• FFmpeg NVENC (GPU) & CUDA Compute Daemon<br>• CustomTkinter Desktop Client GUI<br>• Real-Time Progress Streaming & SHA-256 Verification<br>• Empirical Benchmarking, Speedup & Overhead Analysis | [📂 `lab4/`](./lab4/) | ✅ Completed (100/100) |
+| **Lab 05** | **Bluetooth Offline Distributed Multiplayer Ludo Studio** | • Universal Single-File Python Architecture (`ludo.py`)<br>• 100% Vector Canvas 2D Board & SVG 3D Obsidian Dice<br>• Offline P2P via Bluetooth Tethering / Mobile Hotspot<br>• Desk Management (4-Digit Corner Code, Strict Manual Start)<br>• Real Scannable High-Res QR Code & Auto-Fill Link<br>• 100% Authentic 15x15 Rules Engine (56 Steps, Captures, Kills) | [📂 `Lab5(ludo with bluetooth)/`](./Lab5(ludo%20with%20bluetooth)/) | ✅ Completed |
 
 ---
 
@@ -64,6 +65,41 @@ This repository contains the practical laboratory implementations, conceptual gu
 </p>
 <p align="center">
   <i>Real-Time Distributed Task Offloading: Handshake, Asset Upload, Progress Streaming, Remote Transcoding, Download & SHA-256 Verification (<a href="./lab4/ss/demo.mp4">Watch Full HD Video</a>)</i>
+</p>
+
+### 🔹 [Lab 05: Bluetooth Offline Distributed Multiplayer Ludo Studio](./Lab5(ludo%20with%20bluetooth)/)
+- **Universal Single-File Architecture (`ludo.py`)**: Built entirely with Python's standard library (`http.server`, `socket`, `threading`, `json`). Zero external packages (`pip`) and zero external image asset files are required.
+- **100% Vector Canvas & 3D SVG Dice**:
+  - Replaces external JPEG/PNG dependencies with an interactive procedural 600x600 HTML5 Canvas 2D board faithfully replicating authentic Ludo geometry (`bg.jpg`): 4 corner yards with 4x4 rounded cards and concentric base discs (`[2, 2], [4, 2], [2, 4], [4, 4]`), 5-step colored home corridors, start squares with directional arrows, 4 quadrant-colored safe star cells, and clean central goal triangles.
+  - Features an obsidian 3D vector SVG dice generator (`getDiceSvg`) with specular lighting bevels, radial gradient white pips, 360-degree tumbling animation, and active turn pulsing glow.
+- **Distributed State Synchronization & Desk Lobby**:
+  - Thread-safe desk management (`threading.Lock`) supporting unique 4-digit desk codes, permanent top-right corner desk badges, dynamic scannable QR codes encoding local network IPs, and a strict Leader-only manual start policy (never auto-starts).
+  - High-frequency RESTful client polling (`450ms`) maintaining real-time board state, active turns, and action streams across all connected nodes.
+- **Offline Bluetooth & Hotspot Networking**: Seamless peer-to-peer distributed gameplay between Computers, Laptops, Android, and iOS devices over pure **Bluetooth PAN (Personal Area Network)** or offline **Mobile Hotspot** with zero internet connection.
+- **Authentic Rules Engine**: Full 56-step tracks, 4 player paths, safe squares, 3 consecutive sixes forfeiture, blockade mechanics, token captures, and bonus rolls.
+
+#### 🎮 Lab 05 Cross-Platform Execution Previews
+<p align="center">
+  <img src="./Lab5(ludo with bluetooth)/ss/laptop.PNG" alt="Computer Laptop In-Game Board" width="850"/>
+</p>
+<p align="center">
+  <i>Laptop & Desktop Gameplay: 15x15 Vector Canvas Board, 3D Obsidian Dice, Specular Tokens & Live HUD</i>
+</p>
+
+<p align="center">
+  <img src="./Lab5(ludo with bluetooth)/ss/home.PNG" alt="Welcome Screen & Desk Launcher" width="420"/>
+  &nbsp;&nbsp;
+  <img src="./Lab5(ludo with bluetooth)/ss/qr%20code%20for%20joning.PNG" alt="Desk Lobby with QR Code" width="420"/>
+</p>
+<p align="center">
+  <i>Left: Desk Creation & Joining Screen • Right: Desk Lobby with Corner Code & Real Scannable QR Pairing</i>
+</p>
+
+<p align="center">
+  <img src="./Lab5(ludo with bluetooth)/ss/mobile.jpeg" alt="Mobile Touch Screen Play" width="340"/>
+</p>
+<p align="center">
+  <i>Mobile Smartphone View: Touch-Optimized Responsive Gameplay via Bluetooth Tethering (Zero-Install)</i>
 </p>
 
 ---
@@ -126,12 +162,26 @@ Parallel-and-Distributed-Computing/
     │   ├── client_gui_progress.PNG          # Real-Time Progress Streaming (FPS, Speed & ETA)
     │   ├── client_gui_completed.PNG         # Finished Offload & SHA-256 Verified Badge
     │   └── server_terminal_execution.PNG    # Remote Server Daemon Terminal Execution Trace
-    └── benchmarks/                          # Benchmarking Data & Visual Analysis
-        ├── benchmark_report.md              # Formal Technical Performance Analysis Report
-        ├── generate_benchmark_plots.py      # Matplotlib Analytical Chart Generator
-        ├── benchmark_data.json              # Empirical Benchmarking Records
-        ├── benchmark_execution_time.png     # Chart 1: Turnaround Time Comparison
-        └── benchmark_speedup_overhead.png   # Chart 2: Speedup vs Network Overhead
+│   └── benchmarks/                          # Benchmarking Data & Visual Analysis
+│       ├── benchmark_report.md              # Formal Technical Performance Analysis Report
+│       ├── generate_benchmark_plots.py      # Matplotlib Analytical Chart Generator
+│       ├── benchmark_data.json              # Empirical Benchmarking Records
+│       ├── benchmark_execution_time.png     # Chart 1: Turnaround Time Comparison
+│       └── benchmark_speedup_overhead.png   # Chart 2: Speedup vs Network Overhead
+│
+├── run_lab5.bat                             # One-Click Root Launcher for Lab 5
+├── ludo.py                                  # Root Launcher Entrypoint for Lab 5
+└── Lab5(ludo with bluetooth)/               # Lab 05: Bluetooth Offline Multiplayer Ludo Studio
+    ├── ludo.py                              # ALL-IN-ONE Universal Python Single-File Studio
+    ├── run_ludo.bat                         # One-Click Local Launcher
+    ├── ludo_logic.py                        # Standalone Authentic 15x15 Rules Engine
+    ├── bluetooth_network.py                 # Bluetooth RFCOMM / Sockets Transport
+    ├── ss/                                  # Live Execution Screenshots
+    │   ├── home.PNG                         # Welcome Screen & Desk Launcher
+    │   ├── qr code for joning.PNG           # Desk Lobby & Scannable QR Pairing
+    │   ├── laptop.PNG                       # Laptop / Desktop Active Match Board
+    │   └── mobile.jpeg                      # Mobile Responsive Smartphone View
+    └── README.md                            # Lab 05 Complete Documentation & Pairing Guide
 ```
 
 ---
@@ -147,7 +197,25 @@ Parallel-and-Distributed-Computing/
 
 ---
 
-### 1. Running Lab 04 (Distributed Task Offloading & Remote GPU Rendering)
+### 1. Running Lab 05 (Bluetooth Offline Multiplayer Ludo Studio)
+
+#### Option A: One-Click Launcher (Windows)
+Double-click `run_lab5.bat` in the root directory, or execute:
+```bash
+python "Lab5(ludo with bluetooth)/ludo.py"
+```
+
+#### Option B: Cross-Device Offline Play
+1. **Host Computer / Laptop**: Automatically launches `http://localhost:8080`. Click **"Create New Desk"** to generate a 4-digit Desk Code.
+2. **Mobile Phones & Other Laptops**:
+   - Connect via **Bluetooth Tethering** or **Offline Mobile Hotspot** (Zero internet / mobile data required).
+   - Scan the on-screen high-res QR code with your phone camera, or visit `http://<Host-IP>:8080`.
+   - The Desk Code auto-fills; click **"Join Desk"** and wait in the Lobby.
+3. **Leader Control**: Once 2 or more players join, the Leader clicks **"START MATCH"** to begin!
+
+---
+
+### 2. Running Lab 04 (Distributed Task Offloading & Remote GPU Rendering)
 
 #### Step A: Launch the Remote Worker Daemon (Server Node)
 ```bash
@@ -165,7 +233,7 @@ python lab4/client/client_gui.py
 
 ---
 
-### 2. Running Lab 03 (Multi-Threaded Server & Concurrent Clients)
+### 3. Running Lab 03 (Multi-Threaded Server & Concurrent Clients)
 1. **Start the Multi-Threaded Server:**
    ```bash
    cd lab3
