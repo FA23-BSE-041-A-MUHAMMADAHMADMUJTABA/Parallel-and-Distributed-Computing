@@ -118,18 +118,21 @@ class RemoteExecutionEngine:
             use_nvenc = True
             codec = "h264_nvenc"
             nvenc_preset = "p4" if preset in ["medium", "default"] else ("p1" if preset == "ultrafast" else "p5")
-            encoder_args = ["-c:v", codec, "-preset", nvenc_preset, "-b:v", str(bitrate)]
+            encoder_args = ["-c:v", codec, "-preset", nvenc_preset, "-b:v", str(bitrate), "-pix_fmt", "yuv420p"]
         else:
             codec = "libx264"
-            encoder_args = ["-c:v", codec, "-preset", preset, "-b:v", str(bitrate), "-threads", str(self.sys_info["cpu_count"])]
+            encoder_args = ["-c:v", codec, "-preset", preset, "-b:v", str(bitrate), "-threads", str(self.sys_info["cpu_count"]), "-pix_fmt", "yuv420p"]
 
         # Video filter options & creative editing effects
         vf_filters = []
         if resolution != "original" and "x" in resolution:
             vf_filters.append(f"scale={resolution}")
+        else:
+            # Ensure dimensions are even for yuv420p compatibility
+            vf_filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
 
         if filter_effect == "grayscale":
-            vf_filters.append("format=gray")
+            vf_filters.append("hue=s=0")
         elif filter_effect == "sepia":
             vf_filters.append("colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131")
         elif filter_effect == "mirror":
@@ -138,6 +141,9 @@ class RemoteExecutionEngine:
             vf_filters.append("boxblur=5:1")
         elif filter_effect == "speed_2x":
             vf_filters.append("setpts=0.5*PTS")
+
+        # Always enforce yuv420p in filter chain
+        vf_filters.append("format=yuv420p")
 
         vf_args = []
         if vf_filters:
@@ -154,6 +160,7 @@ class RemoteExecutionEngine:
             *encoder_args,
             *vf_args,
             "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
             "-progress", "pipe:1",
             "-nostats",
             output_path
@@ -429,7 +436,11 @@ class RemoteExecutionEngine:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
             m = re.search(r"Video:.*,\s*(\d{2,5})x(\d{2,5})", res.stderr)
             if m:
-                return int(m.group(1)), int(m.group(2))
+                w, h = int(m.group(1)), int(m.group(2))
+                # Ensure dimensions are strictly even numbers for yuv420p compatibility
+                w = (w // 2) * 2
+                h = (h // 2) * 2
+                return w, h
         except Exception:
             pass
         return 1280, 720
@@ -512,10 +523,10 @@ class RemoteExecutionEngine:
             use_nvenc = True
             codec = "h264_nvenc"
             nvenc_preset = "p4" if preset in ["medium", "default"] else ("p1" if preset == "ultrafast" else "p5")
-            encoder_args = ["-c:v", codec, "-preset", nvenc_preset, "-b:v", str(bitrate)]
+            encoder_args = ["-c:v", codec, "-preset", nvenc_preset, "-b:v", str(bitrate), "-pix_fmt", "yuv420p"]
         else:
             codec = "libx264"
-            encoder_args = ["-c:v", codec, "-preset", preset, "-b:v", str(bitrate), "-threads", str(self.sys_info["cpu_count"])]
+            encoder_args = ["-c:v", codec, "-preset", preset, "-b:v", str(bitrate), "-threads", str(self.sys_info["cpu_count"]), "-pix_fmt", "yuv420p"]
 
         # Video filters
         vf_filters = []
@@ -526,7 +537,7 @@ class RemoteExecutionEngine:
             vf_filters.append(f"scale={w}:{h}")
 
         if filter_effect == "grayscale":
-            vf_filters.append("format=gray")
+            vf_filters.append("hue=s=0")
         elif filter_effect == "sepia":
             vf_filters.append("colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131")
         elif filter_effect == "mirror":
@@ -535,6 +546,9 @@ class RemoteExecutionEngine:
             vf_filters.append("boxblur=5:1")
         elif filter_effect == "speed_2x":
             vf_filters.append("setpts=0.5*PTS")
+
+        # Always enforce yuv420p in filter chain
+        vf_filters.append("format=yuv420p")
 
         vf_args = []
         if vf_filters:
@@ -567,6 +581,7 @@ class RemoteExecutionEngine:
             *encoder_args,
             *vf_args,
             "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
             "-progress", "pipe:1",
             "-nostats",
             output_path

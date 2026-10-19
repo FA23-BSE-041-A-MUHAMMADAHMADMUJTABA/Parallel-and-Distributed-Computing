@@ -359,7 +359,7 @@ class TaskOffloaderApp(ctk.CTk):
             text_color="#e2e8f0"
         )
         self.workload_textbox.pack(fill="x", padx=10, pady=(0, 6))
-        self.workload_textbox.insert("end", "No video selected yet.\n• '📁 Select Entire Folder': Combines all video parts in folder.\n• '📑 Select Multiple Files': Pick multiple videos anywhere to combine.\n• '📄 Single File': Offloads a single video.\n")
+        self.workload_textbox.insert("end", "No video selected yet.\n• '📁 Select Entire Folder': Combines all video parts in folder.\n• '📑 Select Multiple Files': Pick multiple videos anywhere to combine.\n• Test parts: client/sample_assets/sample_parts/ (Part 1, 2, 3 with bold visual labels)\n")
         self.workload_textbox.configure(state="disabled")
 
         # Legacy label reference
