@@ -66,6 +66,9 @@ class TaskOffloaderApp(ctk.CTk):
         self.selected_folder_path = ""
         self.download_output_dir = os.path.join(current_dir, "client_downloads")
         os.makedirs(self.download_output_dir, exist_ok=True)
+        default_combined = os.path.join(self.download_output_dir, "combined_video.mp4")
+        if os.path.exists(default_combined):
+            self.last_rendered_path = default_combined
 
         # Thread-safe UI update queue
         self.ui_queue = queue.Queue()
@@ -137,11 +140,12 @@ class TaskOffloaderApp(ctk.CTk):
         main_container.pack(fill="both", expand=True, padx=4, pady=2)
         main_container.columnconfigure(0, weight=1)
         main_container.columnconfigure(1, weight=1)
+        main_container.rowconfigure(0, weight=1)
 
         # ==========================================
-        # LEFT COLUMN: Connection & Folder Browser
+        # LEFT COLUMN: Connection & Folder Browser (Scrollable)
         # ==========================================
-        left_col = ctk.CTkFrame(main_container, corner_radius=10)
+        left_col = ctk.CTkScrollableFrame(main_container, corner_radius=10)
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=2)
 
         # Section 1: Networking & Handshake Setup
@@ -353,7 +357,7 @@ class TaskOffloaderApp(ctk.CTk):
 
         self.workload_textbox = ctk.CTkTextbox(
             self.workload_card,
-            height=70,
+            height=120,
             font=ctk.CTkFont(family="Consolas", size=10),
             fg_color=("#111827", "#030712"),
             text_color="#e2e8f0"
@@ -367,9 +371,9 @@ class TaskOffloaderApp(ctk.CTk):
 
 
         # ==========================================
-        # RIGHT COLUMN: Render Config & Dashboard
+        # RIGHT COLUMN: Render Config & Dashboard (Scrollable)
         # ==========================================
-        right_col = ctk.CTkFrame(main_container, corner_radius=10)
+        right_col = ctk.CTkScrollableFrame(main_container, corner_radius=10)
         right_col.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
 
         # Section 3: Render Settings
@@ -509,6 +513,7 @@ class TaskOffloaderApp(ctk.CTk):
         btn_row = ctk.CTkFrame(btn_frame, fg_color="transparent")
         btn_row.pack(fill="x")
 
+        initial_play_state = "normal" if (self.last_rendered_path and os.path.exists(self.last_rendered_path)) else "disabled"
         self.play_btn = ctk.CTkButton(
             btn_row,
             text="▶️ Play Video",
@@ -516,7 +521,7 @@ class TaskOffloaderApp(ctk.CTk):
             hover_color="#0369a1",
             height=30,
             width=90,
-            state="disabled",
+            state=initial_play_state,
             command=self._handle_play_rendered_video
         )
         self.play_btn.pack(side="left", padx=(0, 6))
@@ -632,7 +637,7 @@ class TaskOffloaderApp(ctk.CTk):
     def _build_log_terminal(self):
         """Bottom Real-Time Log Terminal Widget."""
         term_frame = ctk.CTkFrame(self, corner_radius=10)
-        term_frame.pack(fill="both", expand=True, padx=16, pady=(2, 10))
+        term_frame.pack(fill="x", expand=False, padx=16, pady=(2, 8))
 
         head_row = ctk.CTkFrame(term_frame, fg_color="transparent")
         head_row.pack(fill="x", padx=12, pady=(6, 2))
@@ -657,12 +662,13 @@ class TaskOffloaderApp(ctk.CTk):
 
         self.log_textbox = ctk.CTkTextbox(
             term_frame,
+            height=130,
             font=ctk.CTkFont(family="Consolas", size=11),
             fg_color=("#111827", "#030712"),
             text_color="#e2e8f0",
             wrap="none"
         )
-        self.log_textbox.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        self.log_textbox.pack(fill="x", expand=False, padx=12, pady=(0, 6))
 
     # ==========================================
     # LOGGING & UI HELPERS (THREAD-SAFE)
@@ -1117,6 +1123,23 @@ class TaskOffloaderApp(ctk.CTk):
                     cancel_check=lambda: self.cancel_flag
                 )
 
+                if is_concat:
+                    clean_output_path = os.path.join(self.download_output_dir, "combined_video.mp4")
+                    try:
+                        import shutil
+                        if os.path.exists(res['local_output_path']) and os.path.abspath(res['local_output_path']) != os.path.abspath(clean_output_path):
+                            shutil.copy2(res['local_output_path'], clean_output_path)
+                            # Remove older temporary uuid-named combined outputs so only 1 clean copy exists
+                            for old_f in os.listdir(self.download_output_dir):
+                                if old_f.startswith("out_task_") and "_combined" in old_f:
+                                    try:
+                                        os.remove(os.path.join(self.download_output_dir, old_f))
+                                    except Exception:
+                                        pass
+                            res['local_output_path'] = clean_output_path
+                    except Exception:
+                        pass
+
                 def _update_video_done():
                     self.progress_bar.set(1.0)
                     if is_concat:
@@ -1308,10 +1331,17 @@ class TaskOffloaderApp(ctk.CTk):
 
     def _handle_play_rendered_video(self):
         """Opens the downloaded rendered video in the default media player on this laptop."""
-        if self.last_rendered_path and os.path.exists(self.last_rendered_path):
+        target = self.last_rendered_path
+        if not target or not os.path.exists(target):
+            clean_combined = os.path.join(self.download_output_dir, "combined_video.mp4")
+            if os.path.exists(clean_combined):
+                target = clean_combined
+                self.last_rendered_path = clean_combined
+
+        if target and os.path.exists(target):
             try:
-                os.startfile(self.last_rendered_path)
-                self.log(f"[MEDIA PLAYER] Opened rendered video: {self.last_rendered_path}")
+                os.startfile(target)
+                self.log(f"[MEDIA PLAYER] Opened rendered video: {target}")
             except Exception as e:
                 self.log(f"[ERROR] Could not open video player: {e}")
         else:

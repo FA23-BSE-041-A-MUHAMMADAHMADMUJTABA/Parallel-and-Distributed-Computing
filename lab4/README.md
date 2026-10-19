@@ -117,6 +117,14 @@ Modern computational tasks such as **high-resolution video transcoding (H.264/HE
   - Dynamically probes FFmpeg encoder availability.
   - Executes hardware-accelerated encoding using `-c:v h264_nvenc` with configurable presets (`p1`–`p7`).
   - Implements intelligent auto-fallback to high-throughput multi-threaded CPU encoding (`libx264`) on hosts without NVIDIA drivers, preventing runtime crashes.
+- **Multi-Part Video Concatenation & Stitching Engine**:
+  - Automatically receives sequentially uploaded video parts from Computer A, verified by individual SHA-256 hashes.
+  - Generates an in-memory / disk concat demuxer manifest file preserving natural alphanumeric sort order (`part1`, `part2`, ..., `part10`).
+  - Stitches and renders multiple parts into a single master video with GPU NVENC hardware acceleration and real-time progress streaming.
+- **100% Native Windows Playback Guarantee**:
+  - Enforces `-pix_fmt yuv420p` (H.264 Baseline/High Profile) across both GPU and CPU render paths, resolving native Windows Media Player / TV & Movies codec errors.
+  - Automatically calculates even pixel dimensions (`scale=trunc(iw/2)*2:trunc(ih/2)*2`) preventing libx264 odd-dimension crashes.
+  - Moves the MP4 index container atom to the file head (`-movflags +faststart`) for instantaneous, stutter-free playback start.
 - **CUDA / Parallel Tensor Computation**:
   - Module [server/execution_engine.py](./server/execution_engine.py) performs high-dimensional matrix multiplications and decompositions ($O(N^3)$ computational complexity).
   - Uses PyTorch CUDA acceleration when GPU is detected, with multi-threaded NumPy BLAS optimization fallback.
@@ -126,13 +134,23 @@ Modern computational tasks such as **high-resolution video transcoding (H.264/HE
 ---
 
 ### Task 3: Client Desktop GUI Application — 25 Marks
-- **Modern UI Framework**: Crafted using **CustomTkinter** with a sleek dark-themed card interface.
-- **Workload Configuration Panel**:
-  - **Asset Picker**: File browser for video formats (`.mp4`, `.mov`, `.mkv`, `.avi`).
-  - **Synthetic Test Generator**: "Gen Asset" button dynamically generates a synthetic HD 1080p test video with moving geometry and timecodes.
-  - **Render Settings**: Resolution (`1080p`, `720p`, `480p`, `4K`, `Original`), Bitrates (`1500k`–`12000k`), Presets (`ultrafast`, `fast`, `medium`, `slow`), and Acceleration Mode (`Auto`, `NVENC`, `CPU`).
+- **Modern UI Framework & Responsive Scrolling**:
+  - Crafted using **CustomTkinter** with a sleek dark-themed card interface.
+  - Features dual independent **`CTkScrollableFrame`** columns (Left & Right) with native vertical scrollbars and mouse-wheel support, ensuring zero widget clipping on laptops or high-DPI scaling (125%/150%).
+- **Flexible Multi-Part Video Workload Selector**:
+  - **📁 Select Entire Folder**: One-click selection of an entire folder containing video clips/parts, automatically sorted naturally (`part1`, `part2`, `part3`).
+  - **📑 Select Multiple Files**: File dialog allowing users to cherry-pick multiple video files from anywhere on disk to concatenate.
+  - **📄 Single File**: Dedicated browse button for traditional single-video offloading.
+  - **➕ Select from List**: Custom range and index selector (e.g. `1, 2, 3` or `1-4`) from the scanned folder list.
+- **Live Workload Queue & Preview Card**:
+  - Real-time badge counter, aggregated file size, and complete parts queue preview with part numbering and individual file sizes.
+- **Single Consolidated Video Output**:
+  - Automatically packages and outputs a clean, unified **`combined_video.mp4`** in `client_downloads/`, cleanly replacing previous runs and eliminating messy duplicate task copies.
 - **Server Connection HUD**: IP and Port inputs with interactive "Handshake & Ping" button, displaying real-time worker online/offline status, CPU cores, GPU model, and ping latency.
-- **Integrated Real-Time Log Console**: Embedded scrollable terminal with auto-scroll and color-coded tags (`[SYSTEM]`, `[HANDSHAKE]`, `[NET]`, `[STREAM]`, `[VERIFIED]`).
+- **Instant Playback & Inspection**:
+  - Dedicated **"▶️ Play Video"** button launching the rendered video directly in Windows Media Player.
+  - **"📄 View Logs"** button opening the detailed server-side render log file.
+- **Integrated Real-Time Log Console**: Embedded compact terminal with auto-scroll and color-coded tags (`[SYSTEM]`, `[HANDSHAKE]`, `[NET]`, `[STREAM]`, `[VERIFIED]`).
 
 ---
 
@@ -175,15 +193,17 @@ lab4/
 ├── run_server.bat                       # 1-Click Server Launcher (Computer B)
 │
 ├── client/                              # CLIENT APPLICATION (Computer A)
-│   ├── client_gui.py                   # Modern CustomTkinter GUI (CapCut/Clipchamp/Video Exports Browser)
-│   ├── network_client.py               # Socket Client, Handshake, File Transfer & Checksums
+│   ├── client_gui.py                   # Modern CustomTkinter Scrollable GUI (Folder / Multi-File Concat & Single Offload)
+│   ├── network_client.py               # Socket Client, Handshake, Multi-Part Streamer & Checksums
 │   ├── protocol.py                     # Framing Protocol, Headers & Opcodes
-│   ├── utils.py                        # SHA-256 Hasher, System Info & Formatting
+│   ├── utils.py                        # Natural Sort Key, SHA-256 Hasher, System Info & Formatting
 │   ├── benchmark.py                    # Local vs Remote Comparative Benchmark Runner
+│   ├── create_sample_parts.py          # Identifiable Multi-Part Sample Video Generator (Part 1, 2, 3)
 │   ├── sample_project_task.py          # Heavy Simulation / Monte Carlo Offload Task
 │   ├── run_client.bat                  # Standalone Client Launcher for Computer A
 │   ├── sample_assets/                  # Sample Video Assets for Testing
-│   └── client_downloads/               # Received Rendered Videos & Server Logs
+│   │   └── sample_parts/               # Labeled Multi-Part Clips (part1.mp4, part2.mp4, part3.mp4)
+│   └── client_downloads/               # Received Rendered Outputs (combined_video.mp4 & Server Logs)
 │
 ├── server/                              # SERVER WORKER (Computer B)
 │   ├── server_gui.py                   # Modern CustomTkinter Server Monitor & Node Dashboard
@@ -248,31 +268,34 @@ cd lab4/client
 python client_gui.py
 ```
 
-#### 🎬 Third-Party Video Editor Integration Workflow (CapCut / Clipchamp / Premiere / etc.):
+#### 🎬 Video Offload & Multi-Part Concatenation Workflow:
 1. **Connect & Handshake**: Enter Server B's IP address (shown on Server GUI, e.g. `192.168.1.20`) and Port `5000`. Click **"⚡ Handshake & Ping"**.
    - A modal confirms connection, server hostname, CPU core count, GPU acceleration status, and round-trip ping latency.
-2. **Select Video Exports Folder**:
-   - In Section 2, click **"📂 Browse Folder"** and select ANY destination folder where CapCut, Clipchamp, or any other editor saved your video exports.
-   - The GUI scans the folder and lists all video files found with file sizes and timestamps.
-   - Select the video from the list (or click **"📄 Browse File"** for any single video file).
-3. **Configure Server-Side Render Options**:
+2. **Choose Video Selection Mode**:
+   - **Mode A: 📁 Select Entire Folder**: Select any directory containing video clips (e.g. `client/sample_assets/sample_parts/` or your editor export folder). All parts are sorted sequentially in natural order (`part1`, `part2`, `part3`).
+   - **Mode B: 📑 Select Multiple Files**: Pick multiple video files from anywhere on disk to stitch into a master video.
+   - **Mode C: 📄 Single File**: Pick a single video file for direct hardware transcoding.
+   - **Mode D: ➕ Select from List**: Type indices/ranges (e.g. `1, 2, 3` or `1-4`) from the scanned folder list.
+3. **Inspect the Scrollable Workload Card**:
+   - Scroll down the left column using your mouse wheel or the vertical scrollbar.
+   - The **Workload Queue Card** shows the live queue: Part numbers, file names, file sizes, and the exact playback sequence.
+4. **Configure Server-Side Render Options**:
    - Resolution: `1920x1080` (FHD), `1280x720` (HD), `854x480` (SD), `3840x2160` (4K), or `original`.
    - Bitrate: `1500k`, `3000k`, `5000k`, `8000k`, `12000k`.
    - Preset: `ultrafast`, `fast`, `medium`, `slow`, `p4`.
    - Acceleration Mode: `auto`, `nvenc` (NVIDIA GPU), or `cpu`.
    - Visual Filter: `none`, `grayscale`, `sepia`, `mirror`, `blur`, `speed_2x`.
    - Frame Rate: `original`, `24 fps`, `30 fps`, `60 fps`.
-4. **Offload & Remote Hardware Rendering**:
-   - Click **"🚀 Send Video to Server for Rendering (Computer B)"**.
-   - Input video is SHA-256 hashed and streamed over TCP in 64 KB chunks.
-   - Server renders with hardware acceleration while streaming real-time progress (`FPS`, `Speed`, `%`, `ETA`) back to client.
+5. **Offload & Remote Hardware Rendering**:
+   - Click **"🚀 Combine & Render Videos on Server (Computer B)"** (or "Send Video to Server...").
+   - Each video part is SHA-256 hashed and streamed sequentially over TCP in 64 KB chunks.
+   - Server stitches and re-encodes with GPU NVENC (or CPU libx264) in standard **`yuv420p` + `faststart`** format while streaming live progress (`FPS`, `Speed`, `%`, `ETA`) back to client.
    - Server creates a comprehensive execution log file detailing hardware specs, commands, and encoding milestones.
-5. **Auto-Download Rendered Video & Execution Logs**:
-   - Server streams the rendered master video AND the execution log file back to the client.
-   - Client verifies SHA-256 checksums to ensure zero corruption.
-   - Files are saved in `client_downloads/`.
-   - Click **"▶️ Play Video"** to watch the rendered output.
-   - Click **"📄 View Logs"** to inspect full server rendering logs!
+6. **Auto-Download Rendered Video & Execution Logs**:
+   - The master video is downloaded to `client_downloads/` and consolidated as **`combined_video.mp4`** (with zero leftover duplicate task copies).
+   - Client verifies SHA-256 checksums to ensure 100% integrity.
+   - Click **"▶️ Play Video"** to immediately watch the finished master video in Windows Media Player.
+   - Click **"📄 View Logs"** to inspect the full server rendering logs!
 
 ---
 

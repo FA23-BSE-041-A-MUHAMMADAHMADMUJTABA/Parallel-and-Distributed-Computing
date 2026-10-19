@@ -34,7 +34,7 @@ This repository contains the practical laboratory implementations, conceptual gu
 | :---: | :--- | :--- | :---: | :---: |
 | **Lab 02** | **Socket Programming: Variable-Length Framing** | • TCP Byte-Stream Nature<br>• Head-of-Line Blocking Solution<br>• Length-Prefix Framing (`zfill(3)`)<br>• Custom `recvall()` implementation | [📂 `lab2/`](./lab2/) | ✅ Completed |
 | **Lab 03** | **Multi-Threaded TCP Server & Client** | • Multi-Threading via `threading.Thread`<br>• Simultaneous Multi-Client Handling<br>• Thread Synchronization (`threading.Lock`)<br>• Explicit `acquire()` & `release()`<br>• Real-time Thread/IP/Port Terminal Output | [📂 `lab3/`](./lab3/) | ✅ Completed |
-| **Lab 04** | **Custom Distributed Task Offloading & Remote GPU Rendering** | • Peer-to-Peer LAN / Wi-Fi Offloading<br>• Binary+JSON Socket Protocol & Ping Check<br>• FFmpeg NVENC (GPU) & CUDA Compute Daemon<br>• CustomTkinter Desktop Client GUI<br>• Real-Time Progress Streaming & SHA-256 Verification<br>• Empirical Benchmarking, Speedup & Overhead Analysis | [📂 `lab4/`](./lab4/) | ✅ Completed (100/100) |
+| **Lab 04** | **Custom Distributed Task Offloading & Remote GPU Rendering** | • Peer-to-Peer LAN / Wi-Fi Offloading<br>• Binary+JSON Socket Protocol & Ping Check<br>• FFmpeg NVENC (GPU) & Multi-Part Concat Engine<br>• Dual `CTkScrollableFrame` Desktop Client GUI<br>• Real-Time Progress Streaming & Per-Part SHA-256<br>• Windows Playback Guarantee (`yuv420p` + `faststart`)<br>• Empirical Benchmarking, Speedup & Overhead Analysis | [📂 `lab4/`](./lab4/) | ✅ Completed (100/100) |
 | **Lab 05** | **Bluetooth Offline Distributed Multiplayer Ludo Studio** | • Universal Single-File Python Architecture (`ludo.py`)<br>• 100% Vector Canvas 2D Board & SVG 3D Obsidian Dice<br>• Offline P2P via Bluetooth Tethering / Mobile Hotspot<br>• Desk Management (4-Digit Corner Code, Strict Manual Start)<br>• Real Scannable High-Res QR Code & Auto-Fill Link<br>• 100% Authentic 15x15 Rules Engine (56 Steps, Captures, Kills) | [📂 `Lab5(ludo with bluetooth)/`](./Lab5(ludo%20with%20bluetooth)/) | ✅ Completed |
 
 ---
@@ -54,9 +54,9 @@ This repository contains the practical laboratory implementations, conceptual gu
 
 ### 🔹 [Lab 04: Custom Distributed Task Offloading & Remote GPU Rendering](./lab4/)
 - **Task 1: Networking & Handshake Setup (20 Marks)**: Peer-to-peer static IP configuration (`192.168.1.1` server, `192.168.1.2` client), framed handshake protocol (`MAGIC = b"DC"`), server capability discovery (CPU/GPU/NVENC), and real-time RTT latency ping probe.
-- **Task 2: Remote GPU Execution Engine Daemon (25 Marks)**: Background worker daemon executing FFmpeg NVENC hardware acceleration (`-c:v h264_nvenc`) with intelligent CPU multi-threading fallback (`libx264`) and CUDA / NumPy parallel matrix tensor compute workloads.
-- **Task 3: Client Desktop GUI Application (25 Marks)**: Modern CustomTkinter dark-mode desktop interface featuring IP configuration, real-time connection status card, video asset picker & synthetic HD generator, customizable render parameters (Resolution, Bitrate, Preset, Mode), and integrated live log console.
-- **Task 4: Real-Time Progress Tracking & Network Robustness (15 Marks)**: Real-time asynchronous streaming of transcode progress (percentage, FPS, speed multiplier, ETA), 64KB chunked file streaming, and end-to-end SHA-256 cryptographic checksum integrity verification.
+- **Task 2: Remote GPU Execution Engine Daemon & Multi-Part Concat (25 Marks)**: Background worker daemon executing FFmpeg NVENC hardware acceleration (`-c:v h264_nvenc`) with intelligent CPU multi-threading fallback (`libx264`), server-side Concat Demuxer for stitching sequential video parts, CUDA / NumPy parallel matrix tensor compute workloads, and 100% Windows playback compatibility (`yuv420p` + `-movflags +faststart`).
+- **Task 3: Client Desktop GUI Application & Responsive Scrollable Interface (25 Marks)**: Modern CustomTkinter dark-mode desktop interface featuring dual `CTkScrollableFrame` columns, 4 video selection workflows (`📁 Select Entire Folder`, `📑 Select Multiple Files`, `📄 Single File`, and custom index range `1-4`), live Workload Queue Card with natural alphanumeric sorting (`part1`, `part2`, ..., `part10`), and single consolidated output (`combined_video.mp4`).
+- **Task 4: Real-Time Progress Tracking & Network Robustness (15 Marks)**: Real-time asynchronous streaming of transcode progress (percentage, FPS, speed multiplier, ETA), 64KB chunked sequential multi-part file streaming, and end-to-end per-part SHA-256 cryptographic checksum integrity verification.
 - **Task 5: Performance Benchmarking & Analysis Report (15 Marks)**: Automated comparative suite measuring local vs remote offloading across 480p, 720p, and 1080p, computing speedup factors ($S > 5.2\times$), network overhead ($\eta_{net} \approx 26.8\%$), and generating publication-quality analytical plots.
 
 #### 🎬 Lab 04 Live Execution Demonstration
@@ -138,15 +138,21 @@ Parallel-and-Distributed-Computing/
     ├── README.md                            # Lab 04 Master Documentation & Architecture Guide
     ├── concept.txt                          # Concise Concepts & Architecture Guide (Roman Urdu & English)
     ├── working.txt                          # Line-by-Line Code & Module Working Guide
-    ├── requirements.txt                     # Dependencies (customtkinter, opencv, matplotlib)
+    ├── requirements.txt                     # Dependencies (customtkinter, opencv, matplotlib, imageio-ffmpeg)
+    ├── run_client.bat                       # 1-Click Client Launcher (Computer A)
+    ├── run_server.bat                       # 1-Click Server Launcher (Computer B)
     ├── client/                              # Client Desktop Application Subsystem
-    │   ├── client_gui.py                    # CustomTkinter Modern Desktop GUI
+    │   ├── client_gui.py                    # CustomTkinter Scrollable GUI (Folder / Multi-File Concat & Offload)
     │   ├── network_client.py                # Client Socket Layer, Handshake, Streamer & Checksum
-    │   └── benchmark.py                     # Local vs Remote Performance Benchmarking Suite
+    │   ├── benchmark.py                     # Local vs Remote Performance Benchmarking Suite
+    │   ├── create_sample_parts.py           # Multi-Part Labeled Test Video Generator (Part 1, 2, 3)
+    │   ├── sample_assets/                   # Test Video Assets (sample_parts/part1, part2, part3)
+    │   └── client_downloads/                # Received Outputs (combined_video.mp4 & Server Logs)
     ├── server/                              # Server Worker Daemon Subsystem
-    │   ├── server_daemon.py                 # Remote Worker Daemon Entrypoint
+    │   ├── server_gui.py                    # CustomTkinter Server Monitor & Node Dashboard
+    │   ├── server_daemon.py                 # Remote Worker Daemon Entrypoint (0.0.0.0:5000)
     │   ├── network_server.py                # Multi-Threaded Socket Listener & Progress Streamer
-    │   ├── execution_engine.py              # FFmpeg NVENC GPU & Parallel Matrix Compute Engine
+    │   ├── execution_engine.py              # FFmpeg NVENC GPU & Multi-Part Concat Demuxer Engine
     │   └── task_queue.py                    # Thread-Safe Task Queue Manager
     ├── common/                              # Shared Protocol & Network Utilities
     │   ├── protocol.py                      # Framed Binary+JSON Protocol (Magic Bytes 'DC')
@@ -227,9 +233,13 @@ python lab4/server/server_daemon.py --host 0.0.0.0 --port 5000
 python lab4/client/client_gui.py
 ```
 - Click **"⚡ Handshake & Ping"** to verify connection and inspect remote hardware specs.
-- Click **"🎬 Gen Asset"** to generate an HD test video (or browse your own video).
-- Click **"🚀 Offload Task to Remote Worker"** to stream the job, view real-time progress percentages, and download verified output.
-- Click **"📈 Benchmark (Local vs Remote)"** to run the comparative performance suite.
+- Choose your video workload:
+  - **📁 Select Entire Folder**: Combines all clips in a folder (e.g. `client/sample_assets/sample_parts/`).
+  - **📑 Select Multiple Files**: Pick multiple video files from anywhere on disk to stitch into a master video.
+  - **📄 Single File**: Offload a single video for hardware transcoding.
+- Scroll down the left column using mouse wheel / scrollbar to inspect the live **Workload Queue Card**.
+- Click **"🚀 Combine & Render Videos on Server (Computer B)"**.
+- Once complete, click **"▶️ Play Video"** to watch the finished `combined_video.mp4` in Windows Media Player!
 
 ---
 
