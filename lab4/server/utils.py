@@ -10,10 +10,16 @@ Description: Checksum integrity, system discovery, formatting, and asset generat
 import os
 import sys
 import time
+import re
 import hashlib
 import platform
 import subprocess
 from typing import Dict, Any, Tuple
+
+def natural_sort_key(s: str) -> list:
+    """Sort strings containing numbers in natural human order (e.g. part1, part2, part10)."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
 
 def compute_sha256(filepath: str, chunk_size: int = 128 * 1024) -> str:
     """

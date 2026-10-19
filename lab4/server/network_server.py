@@ -253,7 +253,7 @@ class RemoteWorkerServer:
                     pass
 
     def _process_job_submission(self, sock: socket.socket, payload: bytes, addr: tuple) -> None:
-        """Receives asset file, validates SHA-256 checksum, and schedules task."""
+        """Receives asset file(s), validates SHA-256 checksums, and schedules task."""
         import json
         meta = json.loads(payload.decode("utf-8"))
         task_id = meta["task_id"]
@@ -262,59 +262,113 @@ class RemoteWorkerServer:
         expected_size = meta.get("file_size", 0)
         expected_sha256 = meta.get("sha256", "")
         config = meta.get("config", {})
+        files_meta = meta.get("files", [])
+        is_concat = meta.get("is_concat", False) or len(files_meta) > 1
 
-        self.log(f"\n[*] [TASK RECEIVED] Task ID: {task_id} ({task_type}) from {addr[0]}")
-        if expected_size > 0:
-            self.log(f"   Incoming Asset: {file_name} ({format_bytes(expected_size)})")
+        if is_concat and len(files_meta) > 1:
+            self.log(f"\n[*] [CONCAT TASK RECEIVED] Task ID: {task_id} ({len(files_meta)} video parts to combine) from {addr[0]}")
+            self.log(f"   Total Asset Size: {format_bytes(expected_size)} across {len(files_meta)} parts")
+        else:
+            self.log(f"\n[*] [TASK RECEIVED] Task ID: {task_id} ({task_type}) from {addr[0]}")
+            if expected_size > 0:
+                self.log(f"   Incoming Asset: {file_name} ({format_bytes(expected_size)})")
 
-        input_path = os.path.join(self.storage_dir, f"in_{task_id}_{os.path.basename(file_name)}") if file_name else ""
-        
         # Acknowledge job submission
-        send_json(sock, MsgType.JOB_ACCEPTED, {"task_id": task_id, "status": "READY_FOR_UPLOAD"})
+        send_json(sock, MsgType.JOB_ACCEPTED, {"task_id": task_id, "status": "READY_FOR_UPLOAD", "is_concat": is_concat})
 
-        # Stream incoming asset file chunks if file size > 0
-        if expected_size > 0:
-            received_bytes = 0
-            hasher = hashlib.sha256()
+        input_paths = []
 
-            with open(input_path, "wb") as f:
-                while True:
-                    chunk_type, chunk_data = read_packet(sock)
-                    if chunk_type == MsgType.FILE_CHUNK:
-                        f.write(chunk_data)
-                        hasher.update(chunk_data)
-                        received_bytes += len(chunk_data)
-                    elif chunk_type == MsgType.FILE_EOF:
-                        break
-                    else:
-                        raise ValueError(f"Unexpected chunk type during upload: {chunk_type!r}")
+        # Case A: Multi-Part Video Concatenation Stream
+        if is_concat and len(files_meta) > 1:
+            for idx, f_item in enumerate(files_meta):
+                part_name = os.path.basename(f_item.get("file_name", f"part_{idx}.mp4"))
+                part_expected_sha = f_item.get("sha256", "")
+                part_dest = os.path.join(self.storage_dir, f"in_{task_id}_{idx:03d}_{part_name}")
 
-            computed_sha256 = hasher.hexdigest()
-            self.log(f"   Upload Complete. SHA-256: {computed_sha256[:12]}...")
+                hasher = hashlib.sha256()
+                received_bytes = 0
 
-            # TASK 4: File Integrity Verification Checksum
-            if expected_sha256 and computed_sha256.lower() != expected_sha256.lower():
-                self.log(f"[!] CHECKSUM MISMATCH for {file_name}! Expected: {expected_sha256}, Got: {computed_sha256}")
-                send_json(sock, MsgType.ERROR, {"error": "Checksum verification failed. Corrupted transfer."})
-                if os.path.exists(input_path):
-                    os.remove(input_path)
-                return
+                with open(part_dest, "wb") as f:
+                    while True:
+                        chunk_type, chunk_data = read_packet(sock)
+                        if chunk_type == MsgType.FILE_CHUNK:
+                            f.write(chunk_data)
+                            hasher.update(chunk_data)
+                            received_bytes += len(chunk_data)
+                        elif chunk_type == MsgType.FILE_EOF:
+                            break
+                        else:
+                            raise ValueError(f"Unexpected chunk type during part upload: {chunk_type!r}")
+
+                computed_sha = hasher.hexdigest()
+                if part_expected_sha and computed_sha.lower() != part_expected_sha.lower():
+                    self.log(f"[!] CHECKSUM MISMATCH on part {idx+1}/{len(files_meta)} ({part_name})!")
+                    send_json(sock, MsgType.ERROR, {"error": f"Checksum verification failed on part {part_name}."})
+                    for p in input_paths:
+                        if os.path.exists(p):
+                            try:
+                                os.remove(p)
+                            except Exception:
+                                pass
+                    if os.path.exists(part_dest):
+                        try:
+                            os.remove(part_dest)
+                        except Exception:
+                            pass
+                    return
+
+                input_paths.append(part_dest)
+                self.log(f"   [+] Part {idx+1:02d}/{len(files_meta)} received & verified: {part_name} ({format_bytes(received_bytes)}) ✔")
+
+            self.log(f"[*] [ALL PARTS VERIFIED] All {len(input_paths)} video parts received successfully with 100% SHA-256 integrity!")
+            output_path = os.path.join(self.storage_dir, f"out_{task_id}_combined.mp4")
+            task_item = TaskItem(task_id, task_type, config, input_paths[0], output_path, input_paths=input_paths, is_concat=True)
+
+        # Case B: Single Asset Video / Script Task
+        else:
+            input_path = os.path.join(self.storage_dir, f"in_{task_id}_{os.path.basename(file_name)}") if file_name else ""
+            if expected_size > 0:
+                received_bytes = 0
+                hasher = hashlib.sha256()
+
+                with open(input_path, "wb") as f:
+                    while True:
+                        chunk_type, chunk_data = read_packet(sock)
+                        if chunk_type == MsgType.FILE_CHUNK:
+                            f.write(chunk_data)
+                            hasher.update(chunk_data)
+                            received_bytes += len(chunk_data)
+                        elif chunk_type == MsgType.FILE_EOF:
+                            break
+                        else:
+                            raise ValueError(f"Unexpected chunk type during upload: {chunk_type!r}")
+
+                computed_sha256 = hasher.hexdigest()
+                self.log(f"   Upload Complete. SHA-256: {computed_sha256[:12]}...")
+
+                # File Integrity Verification Checksum
+                if expected_sha256 and computed_sha256.lower() != expected_sha256.lower():
+                    self.log(f"[!] CHECKSUM MISMATCH for {file_name}! Expected: {expected_sha256}, Got: {computed_sha256}")
+                    send_json(sock, MsgType.ERROR, {"error": "Checksum verification failed. Corrupted transfer."})
+                    if os.path.exists(input_path):
+                        os.remove(input_path)
+                    return
+                else:
+                    self.log(f"   [INTEGRITY] SHA-256 checksum verified successfully!")
             else:
-                self.log(f"   [INTEGRITY] SHA-256 checksum verified successfully!")
-        else:
-            input_path = ""
+                input_path = ""
 
-        # Prepare output path based on task type
-        if task_type == "video_transcode":
-            out_ext = ".mp4"
-        elif task_type in ["custom_script", "python_task"]:
-            out_ext = ".json"
-        else:
-            out_ext = ".json"
+            # Prepare output path based on task type
+            if task_type == "video_transcode":
+                out_ext = ".mp4"
+            elif task_type in ["custom_script", "python_task"]:
+                out_ext = ".json"
+            else:
+                out_ext = ".json"
 
-        output_path = os.path.join(self.storage_dir, f"out_{task_id}{out_ext}")
+            output_path = os.path.join(self.storage_dir, f"out_{task_id}{out_ext}")
+            task_item = TaskItem(task_id, task_type, config, input_path, output_path, input_paths=[input_path] if input_path else [], is_concat=False)
 
-        task_item = TaskItem(task_id, task_type, config, input_path, output_path)
         task_item.client_socket = sock
 
         # Add to Task Queue
@@ -357,17 +411,27 @@ class RemoteWorkerServer:
                     pass
 
         try:
-            # 1. Video Transcoding Workload
+            # 1. Video Transcoding Workload (Single or Concatenation)
             if task.task_type == "video_transcode":
-                res = self.engine.execute_video_transcode(
-                    task.input_path,
-                    task.output_path,
-                    task.config,
-                    progress_callback=progress_callback,
-                    check_cancelled=lambda: task.is_cancelled
-                )
+                if getattr(task, "is_concat", False) and len(getattr(task, "input_paths", [])) > 1:
+                    res = self.engine.execute_video_concat(
+                        task.input_paths,
+                        task.output_path,
+                        task.config,
+                        progress_callback=progress_callback,
+                        check_cancelled=lambda: task.is_cancelled
+                    )
+                else:
+                    res = self.engine.execute_video_transcode(
+                        task.input_path,
+                        task.output_path,
+                        task.config,
+                        progress_callback=progress_callback,
+                        check_cancelled=lambda: task.is_cancelled
+                    )
             # 2. CUDA / Tensor / NumPy Matrix Workload
             elif task.task_type == "cuda_compute":
+
                 matrix_size = task.config.get("matrix_size", 1024)
                 iterations = task.config.get("iterations", 10)
                 res = self.engine.execute_cuda_compute(

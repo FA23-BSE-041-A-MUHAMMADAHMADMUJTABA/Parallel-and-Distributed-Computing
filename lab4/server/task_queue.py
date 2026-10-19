@@ -23,12 +23,14 @@ class TaskStatus:
 
 class TaskItem:
     """Represents a discrete offloaded task within the distributed worker node."""
-    def __init__(self, task_id: str, task_type: str, config: Dict[str, Any], input_path: str, output_path: str):
+    def __init__(self, task_id: str, task_type: str, config: Dict[str, Any], input_path: str, output_path: str, input_paths: Optional[list] = None, is_concat: bool = False):
         self.task_id = task_id
         self.task_type = task_type  # 'video_transcode' or 'cuda_compute'
         self.config = config
         self.input_path = input_path
         self.output_path = output_path
+        self.input_paths = input_paths or ([input_path] if input_path else [])
+        self.is_concat = is_concat
         self.status = TaskStatus.QUEUED
         self.submit_time = time.time()
         self.start_time: Optional[float] = None
@@ -40,6 +42,7 @@ class TaskItem:
         self.execution_duration: float = 0.0
         self.is_cancelled = False
         self.client_socket = None  # Bound for real-time progress push
+
 
 
 class TaskQueueManager:

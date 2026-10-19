@@ -13,7 +13,8 @@ import sys
 import time
 import json
 import subprocess
-from typing import Dict, Any, Callable, Optional
+from typing import Dict, Any, Callable, Optional, Tuple, List, Union
+
 
 # Local imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +42,7 @@ class RemoteExecutionEngine:
 
     def execute_video_transcode(
         self,
-        input_path: str,
+        input_path: Any,
         output_path: str,
         config: Dict[str, Any],
         progress_callback: Optional[Callable[[float, float, str, float, str], None]] = None,
@@ -50,9 +51,19 @@ class RemoteExecutionEngine:
         """
         Transcodes video asset using NVENC hardware acceleration if supported,
         falling back to multi-threaded CPU libx264.
+        If input_path is a list of multiple files, concatenates and renders them.
         Streams real-time progress percentages and generates a detailed server render log.
         """
+        if isinstance(input_path, (list, tuple)):
+            if len(input_path) > 1:
+                return self.execute_video_concat(list(input_path), output_path, config, progress_callback, check_cancelled)
+            elif len(input_path) == 1:
+                input_path = input_path[0]
+            else:
+                return {"success": False, "error": "No input video files provided"}
+
         start_time = time.time()
+
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         log_path = output_path.rsplit(".", 1)[0] + "_render_log.txt"
 
@@ -369,7 +380,26 @@ class RemoteExecutionEngine:
         }
 
     def _probe_video_duration(self, video_path: str) -> float:
-        """Extracts exact video duration in seconds using ffprobe or OpenCV."""
+        """Extracts exact video duration in seconds using ffmpeg, ffprobe, or OpenCV."""
+        if not video_path or not os.path.exists(video_path):
+            return 10.0
+
+        # Method 1: FFmpeg banner inspection (fastest and uses bundled binary)
+        try:
+            cmd = [self.ffmpeg_exe, "-i", video_path]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", res.stderr)
+            if m:
+                hours = int(m.group(1))
+                minutes = int(m.group(2))
+                seconds = float(m.group(3))
+                dur = hours * 3600.0 + minutes * 60.0 + seconds
+                if dur > 0:
+                    return dur
+        except Exception:
+            pass
+
+        # Method 2: OpenCV
         try:
             import cv2
             cap = cv2.VideoCapture(video_path)
@@ -381,6 +411,7 @@ class RemoteExecutionEngine:
         except Exception:
             pass
 
+        # Method 3: ffprobe
         try:
             cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -390,6 +421,305 @@ class RemoteExecutionEngine:
             pass
 
         return 10.0
+
+    def _probe_video_resolution(self, video_path: str) -> Tuple[int, int]:
+        """Probes video width and height using ffmpeg banner."""
+        try:
+            cmd = [self.ffmpeg_exe, "-i", video_path]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            m = re.search(r"Video:.*,\s*(\d{2,5})x(\d{2,5})", res.stderr)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+        except Exception:
+            pass
+        return 1280, 720
+
+    def execute_video_concat(
+        self,
+        input_paths: List[str],
+        output_path: str,
+        config: Dict[str, Any],
+        progress_callback: Optional[Callable[[float, float, str, float, str], None]] = None,
+        check_cancelled: Optional[Callable[[], bool]] = None
+    ) -> Dict[str, Any]:
+        """
+        Concatenates multiple video parts/clips into a single complete video and renders it
+        using hardware-accelerated NVENC (or CPU libx264 fallback).
+        Streams real-time progress percentages and generates a detailed server render log.
+        """
+        start_time = time.time()
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        log_path = output_path.rsplit(".", 1)[0] + "_render_log.txt"
+        concat_list_path = output_path.rsplit(".", 1)[0] + "_concat_list.txt"
+
+        log_events = []
+        def log_event(text: str):
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            entry = f"[{timestamp}] {text}"
+            log_events.append(entry)
+
+        log_event("=" * 70)
+        log_event("CSC-334: REMOTE MULTI-PART VIDEO CONCATENATION & RENDERING LOG")
+        log_event("=" * 70)
+        log_event(f"Server Node Hostname  : {self.sys_info.get('hostname', 'Unknown')}")
+        log_event(f"Operating System      : {self.sys_info.get('os', 'Unknown')}")
+        log_event(f"CPU Physical / Logic  : {self.sys_info.get('cpu_count', 'Unknown')} Cores")
+        log_event(f"GPU / NVENC Hardware  : {self.sys_info.get('nvenc_status', 'N/A')}")
+        log_event(f"FFmpeg Binary Path    : {self.ffmpeg_exe}")
+        log_event(f"Processing Mode       : MULTI-PART VIDEO CONCATENATION & TRANSCODE")
+        log_event(f"Total Video Parts     : {len(input_paths)} parts to combine")
+        log_event("-" * 70)
+
+        # 1. Probe each part's duration and file specs
+        durations = []
+        total_in_size = 0
+        log_event("INCOMING VIDEO PARTS SPECIFICATIONS:")
+        for idx, p in enumerate(input_paths, 1):
+            p_size = os.path.getsize(p) if os.path.exists(p) else 0
+            total_in_size += p_size
+            p_sha = compute_sha256(p) if p_size > 0 else "N/A"
+            p_dur = self._probe_video_duration(p)
+            durations.append(p_dur)
+            log_event(f"• Part {idx:02d}: {os.path.basename(p)} | Size: {format_bytes(p_size)} ({p_size:,} B) | Duration: {p_dur:.2f}s | SHA-256: {p_sha[:16]}...")
+
+        total_duration = sum(durations)
+        if total_duration <= 0:
+            total_duration = 10.0 * len(input_paths)
+
+        log_event(f"Total Combined Input Size    : {format_bytes(total_in_size)} ({total_in_size:,} bytes)")
+        log_event(f"Total Probed Video Duration  : {total_duration:.2f} seconds")
+
+        # 2. Extract configuration parameters
+        resolution = config.get("resolution", "original")
+        bitrate = config.get("bitrate", "3000k")
+        preset = config.get("preset", "fast")
+        force_mode = config.get("mode", "auto")
+        filter_effect = config.get("filter", "none")
+        fps_val = str(config.get("fps", "original"))
+
+        log_event("-" * 70)
+        log_event("RENDER CONFIGURATION PARAMETERS:")
+        log_event(f"• Target Resolution   : {resolution}")
+        log_event(f"• Target Bitrate      : {bitrate}")
+        log_event(f"• Encoding Preset     : {preset}")
+        log_event(f"• Acceleration Mode   : {force_mode}")
+        log_event(f"• Visual Filter       : {filter_effect}")
+        log_event(f"• Target Frame Rate   : {fps_val}")
+
+        # Codec & encoder arguments
+        use_nvenc = False
+        if force_mode == "nvenc" or (force_mode == "auto" and self.nvenc_available):
+            use_nvenc = True
+            codec = "h264_nvenc"
+            nvenc_preset = "p4" if preset in ["medium", "default"] else ("p1" if preset == "ultrafast" else "p5")
+            encoder_args = ["-c:v", codec, "-preset", nvenc_preset, "-b:v", str(bitrate)]
+        else:
+            codec = "libx264"
+            encoder_args = ["-c:v", codec, "-preset", preset, "-b:v", str(bitrate), "-threads", str(self.sys_info["cpu_count"])]
+
+        # Video filters
+        vf_filters = []
+        if resolution != "original" and "x" in resolution:
+            vf_filters.append(f"scale={resolution}")
+        else:
+            w, h = self._probe_video_resolution(input_paths[0])
+            vf_filters.append(f"scale={w}:{h}")
+
+        if filter_effect == "grayscale":
+            vf_filters.append("format=gray")
+        elif filter_effect == "sepia":
+            vf_filters.append("colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131")
+        elif filter_effect == "mirror":
+            vf_filters.append("hflip")
+        elif filter_effect == "blur":
+            vf_filters.append("boxblur=5:1")
+        elif filter_effect == "speed_2x":
+            vf_filters.append("setpts=0.5*PTS")
+
+        vf_args = []
+        if vf_filters:
+            vf_args = ["-vf", ",".join(vf_filters)]
+
+        if fps_val != "original":
+            clean_fps = fps_val.replace(" fps", "").strip()
+            vf_args.extend(["-r", clean_fps])
+
+        # 3. Create concat demuxer manifest file
+        try:
+            with open(concat_list_path, "w", encoding="utf-8") as f:
+                for p in input_paths:
+                    norm_path = os.path.abspath(p).replace("\\", "/").replace("'", "'\\''")
+                    f.write(f"file '{norm_path}'\n")
+        except Exception as e:
+            log_event(f"[ERROR] Could not write concat list: {e}")
+            self._save_log_file(log_path, log_events)
+            return {"success": False, "error": f"Failed to create concat manifest: {e}"}
+
+        acceleration_label = "NVIDIA NVENC (GPU Hardware)" if use_nvenc else "Multi-Threaded CPU (libx264)"
+        log_event(f"Assigned Engine       : {acceleration_label}")
+        log_event(f"Concat Manifest File  : {concat_list_path}")
+
+        cmd = [
+            self.ffmpeg_exe, "-y",
+            "-loglevel", "error",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_list_path,
+            *encoder_args,
+            *vf_args,
+            "-c:a", "aac", "-b:a", "128k",
+            "-progress", "pipe:1",
+            "-nostats",
+            output_path
+        ]
+        log_event(f"FFmpeg Shell Command  : {' '.join(cmd)}")
+        log_event("-" * 70)
+        log_event("CONCATENATION & ENCODING PROGRESS STREAM:")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        current_fps = 0.0
+        current_speed = "1.0x"
+        last_logged_pct = -10.0
+
+        try:
+            for line in process.stdout:
+                if check_cancelled and check_cancelled():
+                    process.kill()
+                    log_event("[ABORT] Concatenation cancelled by client request.")
+                    self._save_log_file(log_path, log_events)
+                    if os.path.exists(concat_list_path):
+                        try:
+                            os.remove(concat_list_path)
+                        except Exception:
+                            pass
+                    return {"success": False, "error": "Task cancelled by client"}
+
+                line = line.strip()
+                if not line:
+                    continue
+
+                if line.startswith("fps="):
+                    try:
+                        current_fps = float(line.split("=")[1])
+                    except ValueError:
+                        pass
+                elif line.startswith("speed="):
+                    current_speed = line.split("=")[1].strip()
+                elif line.startswith("out_time_us="):
+                    try:
+                        time_us = int(line.split("=")[1])
+                        out_time_sec = time_us / 1_000_000.0
+                        percent = min(99.0, (out_time_sec / total_duration) * 100.0)
+                        speed_mult = float(current_speed.replace("x", "")) if "x" in current_speed and current_speed != "N/A" and float(current_speed.replace("x", "") or 1) > 0 else 1.0
+                        eta = max(0.0, (total_duration - out_time_sec) / speed_mult)
+
+                        if percent - last_logged_pct >= 10.0 or percent >= 98.0:
+                            log_event(f"Progress: {percent:5.1f}% | Encoded: {out_time_sec:5.1f}s / {total_duration:5.1f}s | Speed: {current_speed} | FPS: {current_fps:4.1f} | ETA: {eta:4.1f}s")
+                            last_logged_pct = percent
+
+                        if progress_callback:
+                            progress_callback(
+                                percent,
+                                current_fps,
+                                current_speed,
+                                eta,
+                                f"Combining & Rendering ({len(input_paths)} parts) with {acceleration_label} [{percent:.1f}%]"
+                            )
+                    except (ValueError, ZeroDivisionError):
+                        pass
+                elif line == "progress=end":
+                    log_event("Progress: 100.0% | FFmpeg reported stream completion.")
+                    if progress_callback:
+                        progress_callback(100.0, current_fps, current_speed, 0.0, "Concatenation & Encoding Complete")
+
+            process.wait()
+        except Exception as e:
+            process.kill()
+            log_event(f"[EXCEPTION] Runtime error during concatenation: {e}")
+            self._save_log_file(log_path, log_events)
+            if os.path.exists(concat_list_path):
+                try:
+                    os.remove(concat_list_path)
+                except Exception:
+                    pass
+            raise e
+
+        # Clean up concat list file
+        if os.path.exists(concat_list_path):
+            try:
+                os.remove(concat_list_path)
+            except Exception:
+                pass
+
+        stderr_out = ""
+        if process.stderr:
+            try:
+                stderr_out = process.stderr.read()
+            except Exception:
+                stderr_out = ""
+
+        # Auto fallback if NVENC fails
+        if process.returncode != 0 and use_nvenc:
+            if "Cannot load nvcuda.dll" in stderr_out or "Error while opening encoder" in stderr_out or "Unknown encoder" in stderr_out:
+                log_event("[WARNING] NVENC hardware encoder unavailable. Switching to Multi-threaded CPU fallback...")
+                if progress_callback:
+                    progress_callback(0.0, 0.0, "1.0x", 0.0, "NVENC unavailable. Retrying concat with CPU fallback...")
+                config["mode"] = "cpu"
+                return self.execute_video_concat(input_paths, output_path, config, progress_callback, check_cancelled)
+            else:
+                log_event(f"[ERROR] FFmpeg error: {stderr_out}")
+                self._save_log_file(log_path, log_events)
+                return {"success": False, "error": f"FFmpeg error: {stderr_out[:200] if stderr_out else 'Concat encoding failed'}"}
+
+        if process.returncode != 0:
+            log_event(f"[ERROR] Process exited with code {process.returncode}: {stderr_out}")
+            self._save_log_file(log_path, log_events)
+            return {"success": False, "error": f"FFmpeg execution failed (code {process.returncode}): {stderr_out[:200] if stderr_out else 'Execution error'}"}
+
+        total_exec_duration = time.time() - start_time
+        out_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        out_sha256 = compute_sha256(output_path) if out_size > 0 else "N/A"
+        compression_ratio = ((total_in_size - out_size) / total_in_size * 100.0) if total_in_size > 0 else 0.0
+
+        log_event("-" * 70)
+        log_event("CONCATENATION & RENDER RESULTS & INTEGRITY METRICS:")
+        log_event(f"• Execution Status    : SUCCESS (Return Code 0)")
+        log_event(f"• Total Parts Combined: {len(input_paths)} video parts")
+        log_event(f"• Render Duration     : {total_exec_duration:.3f} seconds")
+        log_event(f"• Average Speed Factor: {current_speed}")
+        log_event(f"• Output Combined Path: {output_path}")
+        log_event(f"• Output File Size    : {format_bytes(out_size)} ({out_size:,} bytes)")
+        log_event(f"• Size Delta Ratio    : {compression_ratio:+.1f}%")
+        log_event(f"• Output SHA-256 Hash : {out_sha256}")
+        log_event("=" * 70)
+        log_event("END OF LOG - Complete video combined, rendered and verified for transmission back to client.")
+        log_event("=" * 70)
+
+        logs_content = "\n".join(log_events)
+        self._save_log_file(log_path, log_events)
+
+        return {
+            "success": True,
+            "engine": acceleration_label,
+            "duration": total_exec_duration,
+            "is_concat": True,
+            "parts_count": len(input_paths),
+            "resolution": resolution,
+            "bitrate": bitrate,
+            "output_size": out_size,
+            "output_sha256": out_sha256,
+            "log_path": log_path,
+            "log_file_name": os.path.basename(log_path),
+            "logs_text": logs_content
+        }
+
 
     def execute_custom_script(
         self,

@@ -104,7 +104,7 @@ class OffloadingClient:
 
     def offload_video_transcode(
         self,
-        input_file: str,
+        input_file: Any,
         output_dir: str,
         render_config: Dict[str, Any],
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -112,18 +112,43 @@ class OffloadingClient:
     ) -> Dict[str, Any]:
         """
         TASK 2 & 4: Submits video transcoding task to remote GPU worker.
-        Transfers asset with SHA-256 verification, receives progress, downloads output.
+        Supports single video transcode or multi-part video concatenation.
+        Transfers asset(s) with SHA-256 verification, receives progress, downloads output.
         """
-        if not os.path.exists(input_file):
-            raise FileNotFoundError(f"Input file not found: {input_file}")
+        if isinstance(input_file, (list, tuple)):
+            input_files = [str(f) for f in input_file]
+        else:
+            input_files = [str(input_file)]
 
-        file_size = os.path.getsize(input_file)
+        if not input_files:
+            raise ValueError("No input video files provided.")
+
+        for f in input_files:
+            if not os.path.exists(f):
+                raise FileNotFoundError(f"Input file not found: {f}")
+
+        is_concat = len(input_files) > 1
+        file_sizes = []
+        file_hashes = []
+
+        # Calculate SHA-256 for all parts
+        for idx, fpath in enumerate(input_files):
+            if progress_callback:
+                if is_concat:
+                    progress_callback({"status": f"Computing SHA-256 checksum for part {idx+1}/{len(input_files)}...", "percent": 0.0})
+                else:
+                    progress_callback({"status": "Computing SHA-256 input checksum...", "percent": 0.0})
+            f_sha = compute_sha256(fpath)
+            file_hashes.append(f_sha)
+            file_sizes.append(os.path.getsize(fpath))
+
+        total_file_size = sum(file_sizes)
         task_id = f"task_{uuid.uuid4().hex[:8]}"
 
-        # Calculate SHA-256 for transmission integrity verification
-        if progress_callback:
-            progress_callback({"status": "Computing SHA-256 input checksum...", "percent": 0.0})
-        input_sha256 = compute_sha256(input_file)
+        if is_concat:
+            out_base_name = f"combined_{os.path.splitext(os.path.basename(input_files[0]))[0]}.mp4"
+        else:
+            out_base_name = os.path.basename(input_files[0])
 
         if not self.is_connected or not self.sock:
             self.connect()
@@ -131,16 +156,30 @@ class OffloadingClient:
 
         # 1. Submit Job Metadata
         if progress_callback:
-            progress_callback({"status": "Submitting job configuration to remote worker...", "percent": 0.0})
+            if is_concat:
+                progress_callback({"status": f"Submitting concatenation job ({len(input_files)} parts) to remote worker...", "percent": 0.0})
+            else:
+                progress_callback({"status": "Submitting job configuration to remote worker...", "percent": 0.0})
 
         job_meta = {
             "task_id": task_id,
             "task_type": "video_transcode",
-            "file_name": os.path.basename(input_file),
-            "file_size": file_size,
-            "sha256": input_sha256,
+            "is_concat": is_concat,
+            "file_name": out_base_name,
+            "file_size": total_file_size,
+            "sha256": file_hashes[0] if not is_concat else "",
+            "files": [
+                {
+                    "index": i,
+                    "file_name": os.path.basename(fpath),
+                    "file_size": file_sizes[i],
+                    "sha256": file_hashes[i]
+                }
+                for i, fpath in enumerate(input_files)
+            ],
             "config": render_config
         }
+
         try:
             send_json(self.sock, MsgType.JOB_SUBMIT, job_meta)
         except (OSError, ConnectionError):
@@ -153,28 +192,43 @@ class OffloadingClient:
         if msg_type != MsgType.JOB_ACCEPTED:
             raise ConnectionError(f"Worker did not accept job: {ack}")
 
-        # 2. Stream File Asset to Worker
+        # 2. Stream File Asset(s) to Worker
         upload_start = time.time()
-        sent_bytes = 0
-        with open(input_file, "rb") as f:
-            while chunk := f.read(CHUNK_SIZE):
-                if cancel_check and cancel_check():
-                    send_json(self.sock, MsgType.CANCEL_REQ, {"task_id": task_id})
-                    raise InterruptedError("Job cancelled by user.")
-                
-                send_packet(self.sock, MsgType.FILE_CHUNK, chunk)
-                sent_bytes += len(chunk)
-                upload_pct = (sent_bytes / file_size) * 100.0
-                if progress_callback and sent_bytes % (CHUNK_SIZE * 4) == 0:
-                    speed = (sent_bytes / (time.time() - upload_start + 0.001)) / (1024 * 1024)
-                    progress_callback({
-                        "status": f"Uploading asset ({format_bytes(sent_bytes)}/{format_bytes(file_size)}) @ {speed:.2f} MB/s",
-                        "percent": upload_pct,
-                        "upload_progress": upload_pct
-                    })
+        sent_total_bytes = 0
 
-        send_packet(self.sock, MsgType.FILE_EOF, input_sha256.encode("utf-8"))
+        for i, fpath in enumerate(input_files):
+            fsize = file_sizes[i]
+            fhash = file_hashes[i]
+            fname = os.path.basename(fpath)
+
+            with open(fpath, "rb") as f:
+                while chunk := f.read(CHUNK_SIZE):
+                    if cancel_check and cancel_check():
+                        send_json(self.sock, MsgType.CANCEL_REQ, {"task_id": task_id})
+                        raise InterruptedError("Job cancelled by user.")
+
+                    send_packet(self.sock, MsgType.FILE_CHUNK, chunk)
+                    sent_total_bytes += len(chunk)
+
+                    if progress_callback and (sent_total_bytes % (CHUNK_SIZE * 4) == 0 or sent_total_bytes == total_file_size):
+                        speed = (sent_total_bytes / (time.time() - upload_start + 0.001)) / (1024 * 1024)
+                        upload_pct = (sent_total_bytes / (total_file_size or 1)) * 100.0
+                        if is_concat:
+                            status_text = f"Uploading part {i+1}/{len(input_files)}: {fname} ({format_bytes(sent_total_bytes)}/{format_bytes(total_file_size)}) @ {speed:.2f} MB/s"
+                        else:
+                            status_text = f"Uploading asset ({format_bytes(sent_total_bytes)}/{format_bytes(total_file_size)}) @ {speed:.2f} MB/s"
+                        progress_callback({
+                            "status": status_text,
+                            "percent": upload_pct,
+                            "upload_progress": upload_pct,
+                            "current_part": i + 1,
+                            "total_parts": len(input_files)
+                        })
+
+            send_packet(self.sock, MsgType.FILE_EOF, fhash.encode("utf-8"))
+
         upload_duration = time.time() - upload_start
+
 
         # 3. Stream Real-Time Progress from Worker
         remote_compute_start = time.time()
@@ -288,18 +342,21 @@ class OffloadingClient:
         return {
             "success": True,
             "task_id": task_id,
+            "is_concat": is_concat,
+            "parts_count": len(input_files),
+            "input_files": input_files,
             "engine": result_payload.get("engine", "Remote Worker"),
             "local_output_path": local_output_path,
             "local_log_path": local_log_path,
             "server_logs_text": server_logs_text,
-            "input_file_size": file_size,
+            "input_file_size": total_file_size,
             "output_file_size": os.path.getsize(local_output_path),
             "upload_duration_sec": round(upload_duration, 3),
             "remote_compute_duration_sec": round(remote_compute_duration, 3),
             "download_duration_sec": round(download_duration, 3),
             "network_overhead_sec": round(network_overhead_time, 3),
             "total_turnaround_sec": round(total_turnaround_time, 3),
-            "input_sha256": input_sha256,
+            "input_sha256": file_hashes[0] if not is_concat else ", ".join(h[:8] for h in file_hashes),
             "output_sha256": computed_out_sha256,
             "checksum_verified": checksum_verified
         }

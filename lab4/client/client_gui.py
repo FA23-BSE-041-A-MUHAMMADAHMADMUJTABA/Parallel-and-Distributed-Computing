@@ -27,7 +27,7 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 from network_client import OffloadingClient
-from utils import generate_sample_video, format_bytes, format_time, compute_sha256
+from utils import generate_sample_video, format_bytes, format_time, compute_sha256, natural_sort_key
 from protocol import DEFAULT_HOST, DEFAULT_PORT
 
 
@@ -41,7 +41,7 @@ class TaskOffloaderApp(ctk.CTk):
     """
     Modern CustomTkinter GUI for Custom Distributed Task Offloading,
     Remote Hardware Acceleration, Third-Party Video Editor Integration,
-    and LAN File Sharing Hub.
+    Multi-Part Video Concatenation & Complete Video Rendering, and LAN File Sharing Hub.
     """
     def __init__(self):
         super().__init__()
@@ -58,6 +58,9 @@ class TaskOffloaderApp(ctk.CTk):
         self.is_processing = False
         self.cancel_flag = False
         self.selected_file_path = ""
+        self.selected_video_files: List[str] = []
+        self.selection_mode = "none"  # "folder", "multi", "single", "none"
+        self._folder_video_files: List[tuple] = []
         self.last_rendered_path = ""
         self.last_log_path = ""
         self.selected_folder_path = ""
@@ -76,7 +79,8 @@ class TaskOffloaderApp(ctk.CTk):
         # Log Initial System Banner
         self.log("[SYSTEM] Distributed Task Offloading Client initialized (Computer A).")
         self.log(f"[SYSTEM] Default Target: {DEFAULT_HOST}:{DEFAULT_PORT}. Click '⚡ Handshake & Ping' to connect to Computer B.")
-        self.log("[TIP] Use '📂 Video Editor Exports' tab to select your CapCut/ClipChamp/etc. output folder!")
+        self.log("[NEW] Video Concat Feature: Select an Entire Folder of video parts or Multi-Select files to combine and render!")
+
 
     # ==========================================
     # UI BUILDERS
@@ -189,18 +193,18 @@ class TaskOffloaderApp(ctk.CTk):
         )
         self.worker_specs_lbl.pack(anchor="w", padx=10, pady=(0, 5))
 
-        # Section 2: Third-Party Video Editor Folder Browser
+        # Section 2: Video Workload Selection
         folder_title = ctk.CTkLabel(
             left_col,
-            text="📂 2. Select Video Exports Folder (CapCut / ClipChamp / etc.)",
+            text="🎬 2. Video Workload: Entire Folder, Multiple Files, or Single File",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#93c5fd"
         )
-        folder_title.pack(anchor="w", padx=14, pady=(8, 4))
+        folder_title.pack(anchor="w", padx=14, pady=(8, 2))
 
         folder_desc = ctk.CTkLabel(
             left_col,
-            text="Browse to the folder where your video editor saves exported videos.",
+            text="Choose an entire folder of video parts, select multiple files to combine, or pick a single file.",
             font=ctk.CTkFont(size=11),
             text_color="#94a3b8"
         )
@@ -209,7 +213,7 @@ class TaskOffloaderApp(ctk.CTk):
         folder_row = ctk.CTkFrame(left_col, fg_color="transparent")
         folder_row.pack(fill="x", padx=14, pady=2)
 
-        self.folder_path_entry = ctk.CTkEntry(folder_row, placeholder_text="Select exports folder...", width=240)
+        self.folder_path_entry = ctk.CTkEntry(folder_row, placeholder_text="Select or paste folder with video parts...", width=240)
         self.folder_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.folder_browse_btn = ctk.CTkButton(
@@ -235,62 +239,132 @@ class TaskOffloaderApp(ctk.CTk):
         # Video Files List in Folder
         self.video_list_label = ctk.CTkLabel(
             left_col,
-            text="📹 Video Files Found: (select a folder first)",
+            text="📹 Video Files in Folder: (select a folder first)",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#cbd5e1"
         )
-        self.video_list_label.pack(anchor="w", padx=14, pady=(6, 2))
+        self.video_list_label.pack(anchor="w", padx=14, pady=(4, 2))
 
         self.video_listbox = ctk.CTkTextbox(
             left_col,
-            height=100,
-            font=ctk.CTkFont(family="Consolas", size=11),
+            height=85,
+            font=ctk.CTkFont(family="Consolas", size=10),
             fg_color=("#111827", "#030712"),
             text_color="#e2e8f0"
         )
-        self.video_listbox.pack(fill="both", expand=True, padx=14, pady=(0, 4))
-        self.video_listbox.insert("end", "No folder selected yet.\nClick '📂 Browse Folder' to select your CapCut/ClipChamp exports directory.\n")
+        self.video_listbox.pack(fill="x", padx=14, pady=(0, 4))
+        self.video_listbox.insert("end", "No folder scanned yet.\nClick '📂 Browse Folder' to scan your video exports or clip parts folder.\n")
         self.video_listbox.configure(state="disabled")
 
-        # Video selector row
+        # Action Selection Toolbar (Entire Folder vs Multi-Files vs Single)
+        action_toolbar = ctk.CTkFrame(left_col, fg_color="transparent")
+        action_toolbar.pack(fill="x", padx=14, pady=(2, 4))
+
+        self.select_entire_folder_btn = ctk.CTkButton(
+            action_toolbar,
+            text="📁 Select Entire Folder",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=135,
+            fg_color="#7c3aed",
+            hover_color="#6d28d9",
+            command=self._handle_select_entire_folder
+        )
+        self.select_entire_folder_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        self.multi_select_btn = ctk.CTkButton(
+            action_toolbar,
+            text="📑 Select Multiple Files",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=135,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            command=self._handle_browse_multi_files
+        )
+        self.multi_select_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        self.single_browse_btn = ctk.CTkButton(
+            action_toolbar,
+            text="📄 Single File",
+            font=ctk.CTkFont(size=11),
+            width=85,
+            fg_color="#475569",
+            hover_color="#334155",
+            command=self._handle_browse_single_file
+        )
+        self.single_browse_btn.pack(side="left")
+
+        # Custom picker row
         select_row = ctk.CTkFrame(left_col, fg_color="transparent")
         select_row.pack(fill="x", padx=14, pady=(2, 4))
 
         self.video_select_entry = ctk.CTkEntry(
             select_row,
-            placeholder_text="Type video filename or # from list above...",
-            width=200
+            placeholder_text="Enter #s (e.g. 1, 2, 3 or 1-4) or name...",
+            width=180
         )
         self.video_select_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.video_pick_btn = ctk.CTkButton(
             select_row,
-            text="✅ Select Video",
-            width=100,
+            text="➕ Select from List",
+            width=110,
             fg_color="#059669",
             hover_color="#047857",
             command=self._handle_select_video_from_list
         )
         self.video_pick_btn.pack(side="left", padx=(0, 6))
 
-        self.video_browse_btn = ctk.CTkButton(
+        self.clear_btn = ctk.CTkButton(
             select_row,
-            text="📄 Browse File",
-            width=90,
-            fg_color="#475569",
-            hover_color="#334155",
-            command=self._handle_browse_single_file
+            text="🗑️ Clear",
+            width=55,
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            command=self._handle_clear_selection
         )
-        self.video_browse_btn.pack(side="left")
+        self.clear_btn.pack(side="left")
 
-        # Selected file display
-        self.selected_file_lbl = ctk.CTkLabel(
-            left_col,
-            text="Selected: None",
+        # Workload Queue & Preview Card
+        self.workload_card = ctk.CTkFrame(left_col, fg_color=("#374151", "#1e293b"), corner_radius=8)
+        self.workload_card.pack(fill="x", padx=14, pady=(4, 6))
+
+        card_header = ctk.CTkFrame(self.workload_card, fg_color="transparent")
+        card_header.pack(fill="x", padx=10, pady=(6, 2))
+
+        self.workload_badge = ctk.CTkLabel(
+            card_header,
+            text="⚪ NO VIDEO SELECTED",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#fbbf24"
+            text_color="#94a3b8",
+            fg_color=("#111827", "#0f172a"),
+            corner_radius=6,
+            padx=8,
+            pady=2
         )
-        self.selected_file_lbl.pack(anchor="w", padx=14, pady=(2, 6))
+        self.workload_badge.pack(side="left")
+
+        self.workload_stats_lbl = ctk.CTkLabel(
+            card_header,
+            text="0 videos | 0 B",
+            font=ctk.CTkFont(size=11),
+            text_color="#cbd5e1"
+        )
+        self.workload_stats_lbl.pack(side="right")
+
+        self.workload_textbox = ctk.CTkTextbox(
+            self.workload_card,
+            height=70,
+            font=ctk.CTkFont(family="Consolas", size=10),
+            fg_color=("#111827", "#030712"),
+            text_color="#e2e8f0"
+        )
+        self.workload_textbox.pack(fill="x", padx=10, pady=(0, 6))
+        self.workload_textbox.insert("end", "No video selected yet.\n• '📁 Select Entire Folder': Combines all video parts in folder.\n• '📑 Select Multiple Files': Pick multiple videos anywhere to combine.\n• '📄 Single File': Offloads a single video.\n")
+        self.workload_textbox.configure(state="disabled")
+
+        # Legacy label reference
+        self.selected_file_lbl = self.workload_stats_lbl
+
 
         # ==========================================
         # RIGHT COLUMN: Render Config & Dashboard
@@ -681,59 +755,185 @@ class TaskOffloaderApp(ctk.CTk):
         # Store the list for selection
         self._folder_video_files = video_files
 
+    def _update_workload_display(self):
+        """Updates the selected video workload card, badge, preview list, and action button."""
+        files = self.selected_video_files
+        count = len(files)
+        total_size = sum(os.path.getsize(f) for f in files if os.path.exists(f))
+
+        self.workload_textbox.configure(state="normal")
+        self.workload_textbox.delete("1.0", "end")
+
+        if count == 0:
+            self.workload_badge.configure(text="⚪ NO VIDEO SELECTED", text_color="#94a3b8", fg_color=("#111827", "#0f172a"))
+            self.workload_stats_lbl.configure(text="0 videos | 0 B")
+            self.workload_textbox.insert("end", "No video selected yet.\n• '📁 Select Entire Folder': Combines all video parts in folder.\n• '📑 Select Multiple Files': Pick multiple videos anywhere to combine.\n• '📄 Single File': Offloads a single video.\n")
+            self.offload_btn.configure(text="🚀 Select Video(s) Above to Offload", state="normal")
+            self.selected_file_path = ""
+        elif count == 1:
+            self.workload_badge.configure(text="📄 SINGLE VIDEO", text_color="#60a5fa", fg_color=("#1e3a8a", "#172554"))
+            self.workload_stats_lbl.configure(text=f"1 video | {format_bytes(total_size)}")
+            fname = os.path.basename(files[0])
+            self.workload_textbox.insert("end", f"▶ Single Video: {fname} ({format_bytes(total_size)})\n")
+            self.workload_textbox.insert("end", f"   Path: {files[0]}\n")
+            self.workload_textbox.insert("end", f"   Ready to offload to Server for hardware-accelerated rendering.")
+            self.offload_btn.configure(text="🚀 Send Video to Server for Rendering (Computer B)", state="normal")
+            self.selected_file_path = files[0]
+        else:
+            mode_lbl = "📁 ENTIRE FOLDER COMBINE" if self.selection_mode == "folder" else "📑 MULTI-FILES COMBINE"
+            self.workload_badge.configure(text=f"{mode_lbl} ({count} PARTS)", text_color="#34d399", fg_color=("#064e3b", "#022c22"))
+            self.workload_stats_lbl.configure(text=f"{count} videos | Total: {format_bytes(total_size)}")
+            for idx, f in enumerate(files, 1):
+                sz = format_bytes(os.path.getsize(f)) if os.path.exists(f) else "0 B"
+                self.workload_textbox.insert("end", f"[Part {idx:02d}] {os.path.basename(f)} ({sz})\n")
+            self.workload_textbox.insert("end", "─" * 65 + "\n")
+            self.workload_textbox.insert("end", f"⚡ Sequence: All {count} parts will be uploaded, stitched, and rendered into 1 complete video on Computer B!\n")
+            self.offload_btn.configure(text=f"🚀 Combine & Render {count} Videos on Server (Computer B)", state="normal")
+            self.selected_file_path = files[0]
+
+        self.workload_textbox.configure(state="disabled")
+
+    def _handle_select_entire_folder(self):
+        """Selects ALL video files found in the current folder to be combined in natural order."""
+        folder = self.folder_path_entry.get().strip()
+        if not folder or not os.path.isdir(folder):
+            self._handle_browse_folder()
+            folder = self.selected_folder_path
+            if not folder or not os.path.isdir(folder):
+                return
+
+        if not hasattr(self, '_folder_video_files') or not self._folder_video_files:
+            self._refresh_folder_videos()
+
+        if not self._folder_video_files:
+            messagebox.showwarning("No Videos Found", f"No supported video files found in:\n{folder}")
+            return
+
+        all_paths = [os.path.join(folder, item[0]) for item in self._folder_video_files if os.path.exists(os.path.join(folder, item[0]))]
+        if not all_paths:
+            messagebox.showwarning("No Videos", "No video files exist in the specified folder.")
+            return
+
+        all_paths.sort(key=lambda p: natural_sort_key(os.path.basename(p)))
+        self.selected_video_files = all_paths
+        self.selection_mode = "folder"
+        self._update_workload_display()
+
+        self.log(f"\n{'='*60}")
+        self.log(f"📁 [ENTIRE FOLDER SELECTED] All {len(all_paths)} video parts selected from:")
+        self.log(f"   {folder}")
+        self.log(f"   Parts will be combined in sequential numerical order into 1 complete video:")
+        for idx, p in enumerate(all_paths, 1):
+            sz = format_bytes(os.path.getsize(p))
+            self.log(f"   • Part {idx:02d}: {os.path.basename(p)} ({sz})")
+        self.log(f"{'='*60}")
+
+    def _handle_browse_multi_files(self):
+        """Allows user to select multiple video files from anywhere to combine."""
+        paths = filedialog.askopenfilenames(
+            title="Select Multiple Video Files to Combine",
+            filetypes=[("Video Files", "*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.flv *.m4v *.ts"), ("All Files", "*.*")]
+        )
+        if paths:
+            path_list = list(paths)
+            path_list.sort(key=lambda p: natural_sort_key(os.path.basename(p)))
+            self.selected_video_files = path_list
+            self.selection_mode = "multi" if len(path_list) > 1 else "single"
+            self._update_workload_display()
+
+            if len(path_list) > 1:
+                self.log(f"\n{'='*60}")
+                self.log(f"📑 [MULTI-FILES SELECTED] {len(path_list)} video files selected for combination:")
+                for idx, p in enumerate(path_list, 1):
+                    sz = format_bytes(os.path.getsize(p))
+                    self.log(f"   • Part {idx:02d}: {os.path.basename(p)} ({sz})")
+                self.log(f"{'='*60}")
+            else:
+                self.log(f"📄 [SINGLE FILE SELECTED] {os.path.basename(path_list[0])} ({format_bytes(os.path.getsize(path_list[0]))})")
+
+    def _handle_browse_single_file(self):
+        """Browse a single video file from anywhere."""
+        path = filedialog.askopenfilename(
+            title="Select Single Video File",
+            filetypes=[("Video Files", "*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.flv *.m4v *.ts"), ("All Files", "*.*")]
+        )
+        if path:
+            self.selected_video_files = [path]
+            self.selection_mode = "single"
+            self._update_workload_display()
+            sz = format_bytes(os.path.getsize(path))
+            self.log(f"📄 [SINGLE FILE SELECTED] {os.path.basename(path)} ({sz})")
+
     def _handle_select_video_from_list(self):
-        """Selects a video from the folder listing by # or filename."""
+        """Selects one or more videos from the folder listing by #, range, or filename."""
         text = self.video_select_entry.get().strip()
         if not text:
-            messagebox.showwarning("Empty Selection", "Please type a video filename or # from the list above.")
+            messagebox.showwarning("Empty Selection", "Please enter video # (e.g. 1, 2, 3 or 1-4) or filenames from the folder list above.")
             return
 
         if not hasattr(self, '_folder_video_files') or not self._folder_video_files:
             messagebox.showwarning("No Videos", "Please scan a folder first by clicking '📂 Browse Folder'.")
             return
 
-        selected_name = None
+        tokens = [t.strip() for t in text.replace(";", ",").split(",") if t.strip()]
+        selected_paths = []
 
-        # Try to match by number
-        try:
-            idx = int(text)
-            if 1 <= idx <= len(self._folder_video_files):
-                selected_name = self._folder_video_files[idx - 1][0]
-        except ValueError:
-            pass
+        for token in tokens:
+            if "-" in token and len(token.split("-")) == 2:
+                r_parts = token.split("-")
+                try:
+                    start_i, end_i = int(r_parts[0]), int(r_parts[1])
+                    if start_i > end_i:
+                        start_i, end_i = end_i, start_i
+                    for idx in range(start_i, end_i + 1):
+                        if 1 <= idx <= len(self._folder_video_files):
+                            fname = self._folder_video_files[idx - 1][0]
+                            fpath = os.path.join(self.selected_folder_path, fname)
+                            if fpath not in selected_paths and os.path.exists(fpath):
+                                selected_paths.append(fpath)
+                    continue
+                except ValueError:
+                    pass
 
-        # Try to match by filename
-        if not selected_name:
-            for name, _, _ in self._folder_video_files:
-                if text.lower() in name.lower():
-                    selected_name = name
-                    break
+            try:
+                idx = int(token)
+                if 1 <= idx <= len(self._folder_video_files):
+                    fname = self._folder_video_files[idx - 1][0]
+                    fpath = os.path.join(self.selected_folder_path, fname)
+                    if fpath not in selected_paths and os.path.exists(fpath):
+                        selected_paths.append(fpath)
+                    continue
+            except ValueError:
+                pass
 
-        if not selected_name:
-            messagebox.showerror("Not Found", f"No video matching '{text}' found in the folder.")
+            for fname, _, _ in self._folder_video_files:
+                if token.lower() in fname.lower():
+                    fpath = os.path.join(self.selected_folder_path, fname)
+                    if fpath not in selected_paths and os.path.exists(fpath):
+                        selected_paths.append(fpath)
+                        break
+
+        if not selected_paths:
+            messagebox.showerror("Not Found", f"No videos matching '{text}' found in folder listing.")
             return
 
-        full_path = os.path.join(self.selected_folder_path, selected_name)
-        if not os.path.exists(full_path):
-            messagebox.showerror("Error", f"File not found: {full_path}")
-            return
+        selected_paths.sort(key=lambda p: natural_sort_key(os.path.basename(p)))
+        self.selected_video_files = selected_paths
+        self.selection_mode = "folder" if len(selected_paths) > 1 else "single"
+        self._update_workload_display()
+        if len(selected_paths) > 1:
+            self.log(f"✅ [SELECTED {len(selected_paths)} VIDEOS] Queued {len(selected_paths)} parts from folder to combine.")
+        else:
+            self.log(f"✅ [SELECTED] {os.path.basename(selected_paths[0])}")
 
-        self.selected_file_path = full_path
-        size = os.path.getsize(full_path)
-        self.selected_file_lbl.configure(text=f"Selected: {selected_name} ({format_bytes(size)})")
-        self.log(f"✅ [SELECTED] {selected_name} ({format_bytes(size)}) from exports folder")
+    def _handle_clear_selection(self):
+        """Clears the currently selected video queue."""
+        self.selected_video_files = []
+        self.selection_mode = "none"
+        self.selected_file_path = ""
+        self._update_workload_display()
+        self.log("🗑️ [SELECTION CLEARED] Video workload queue reset.")
 
-    def _handle_browse_single_file(self):
-        """Browse a single video file from anywhere."""
-        path = filedialog.askopenfilename(
-            title="Select Video File",
-            filetypes=[("Video Files", "*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.flv *.m4v *.ts"), ("All Files", "*.*")]
-        )
-        if path:
-            self.selected_file_path = path
-            size = os.path.getsize(path)
-            self.selected_file_lbl.configure(text=f"Selected: {os.path.basename(path)} ({format_bytes(size)})")
-            self.log(f"✅ [SELECTED] {os.path.basename(path)} ({format_bytes(size)})")
 
     # ==========================================
     # EVENT HANDLERS
@@ -804,17 +1004,34 @@ class TaskOffloaderApp(ctk.CTk):
         threading.Thread(target=task, daemon=True).start()
 
     def _handle_start_offload(self):
-        """Initiates video rendering offload to remote server."""
+        """Initiates video rendering offload to remote server (single or multi-part concat)."""
         if self.is_processing:
             messagebox.showwarning("Warning", "A task is currently running.")
             return
 
-        if not self.selected_file_path or not os.path.exists(self.selected_file_path):
-            messagebox.showerror("Error", "Please select a video file first.\n\nUse '📂 Browse Folder' to find your CapCut/ClipChamp exports,\nor '📄 Browse File' to select any video file.")
+        if not self.selected_video_files:
+            messagebox.showerror(
+                "No Video Selected",
+                "Please select video(s) first.\n\n"
+                "• Click '📁 Select Entire Folder' to combine all video parts in a folder.\n"
+                "• Click '📑 Select Multiple Files' to choose multiple video files to combine.\n"
+                "• Or click '📄 Single File' to transcode a single video."
+            )
+            return
+
+        # Verify all files exist on disk
+        missing = [f for f in self.selected_video_files if not os.path.exists(f)]
+        if missing:
+            messagebox.showerror("File Not Found", f"The following files could not be found:\n{', '.join(os.path.basename(m) for m in missing)}")
             return
 
         host = self.ip_entry.get().strip()
-        port = int(self.port_entry.get().strip())
+        try:
+            port = int(self.port_entry.get().strip())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid port number.")
+            return
+
         render_cfg = {
             "resolution": self.res_combo.get(),
             "bitrate": self.bitrate_combo.get(),
@@ -823,13 +1040,15 @@ class TaskOffloaderApp(ctk.CTk):
             "filter": self.filter_combo.get(),
             "fps": self.fps_combo.get()
         }
-        selected_file = self.selected_file_path
+        selected_files = list(self.selected_video_files)
+        is_concat = len(selected_files) > 1
 
         self.is_processing = True
         self.cancel_flag = False
 
         self.progress_bar.set(0.0)
-        self.progress_lbl.configure(text="0.0% | Initializing Video Render Offload...")
+        init_text = f"0.0% | Initializing Multi-Part ({len(selected_files)} parts) Concat & Render..." if is_concat else "0.0% | Initializing Video Render Offload..."
+        self.progress_lbl.configure(text=init_text)
         self.metric_integrity.configure(text="Checksum: Calculating...", text_color="#fbbf24")
 
         def run_thread():
@@ -873,15 +1092,25 @@ class TaskOffloaderApp(ctk.CTk):
                     if status:
                         self.log(f"  [REMOTE] {status}")
 
-                video_name = os.path.basename(selected_file)
-                self.log(f"\n{'='*60}")
-                self.log(f"🚀 [OFFLOAD VIDEO] Sending '{video_name}' to Server for Rendering")
-                self.log(f"   Source: {selected_file}")
-                self.log(f"   Config: {render_cfg}")
-                self.log(f"{'='*60}")
+                if is_concat:
+                    self.log(f"\n{'='*60}")
+                    self.log(f"🚀 [OFFLOAD COMBINE & RENDER] Offloading {len(selected_files)} video parts to Server (Computer B)")
+                    self.log(f"   Mode: Stitched concatenation into 1 complete video")
+                    self.log(f"   Parts sequence:")
+                    for idx, p in enumerate(selected_files, 1):
+                        self.log(f"     [{idx:02d}] {os.path.basename(p)} ({format_bytes(os.path.getsize(p))})")
+                    self.log(f"   Target Config: {render_cfg}")
+                    self.log(f"{'='*60}")
+                else:
+                    video_name = os.path.basename(selected_files[0])
+                    self.log(f"\n{'='*60}")
+                    self.log(f"🚀 [OFFLOAD VIDEO] Sending '{video_name}' to Server for Rendering")
+                    self.log(f"   Source: {selected_files[0]}")
+                    self.log(f"   Config: {render_cfg}")
+                    self.log(f"{'='*60}")
 
                 res = self.client.offload_video_transcode(
-                    input_file=selected_file,
+                    input_file=selected_files,
                     output_dir=self.download_output_dir,
                     render_config=render_cfg,
                     progress_callback=progress_cb,
@@ -890,7 +1119,10 @@ class TaskOffloaderApp(ctk.CTk):
 
                 def _update_video_done():
                     self.progress_bar.set(1.0)
-                    self.progress_lbl.configure(text="100.0% | Complete & Downloaded to Laptop!")
+                    if is_concat:
+                        self.progress_lbl.configure(text=f"100.0% | Complete! {len(selected_files)} Parts Combined & Downloaded!")
+                    else:
+                        self.progress_lbl.configure(text="100.0% | Complete & Downloaded to Laptop!")
                     self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
                     self.last_rendered_path = res['local_output_path']
                     self.last_log_path = res.get('local_log_path', '')
@@ -904,15 +1136,21 @@ class TaskOffloaderApp(ctk.CTk):
 
                 self.run_on_ui(_update_video_done)
 
+                out_name = os.path.basename(res['local_output_path'])
                 self.log(f"\n{'='*60}")
-                self.log(f"✅ [SUCCESS] Video Rendered on Server and Downloaded to Laptop!")
-                self.log(f"   • Source File     : {video_name}")
+                if is_concat:
+                    self.log(f"✅ [SUCCESS] Complete Video Combined & Rendered on Server and Downloaded!")
+                    self.log(f"   • Parts Combined  : {len(selected_files)} video parts stitched together")
+                else:
+                    self.log(f"✅ [SUCCESS] Video Rendered on Server and Downloaded to Laptop!")
+                    self.log(f"   • Source File     : {os.path.basename(selected_files[0])}")
+                self.log(f"   • Output Video    : {out_name}")
                 self.log(f"   • Remote Engine   : {res.get('engine')}")
                 self.log(f"   • Upload Time     : {res['upload_duration_sec']}s")
                 self.log(f"   • Render Time     : {res['remote_compute_duration_sec']}s")
                 self.log(f"   • Download Time   : {res['download_duration_sec']}s")
                 self.log(f"   • Total Turnaround: {res['total_turnaround_sec']}s")
-                self.log(f"   • Input Size      : {format_bytes(res['input_file_size'])}")
+                self.log(f"   • Input Total     : {format_bytes(res['input_file_size'])}")
                 self.log(f"   • Output Size     : {format_bytes(res['output_file_size'])}")
                 self.log(f"   • SHA-256 Verified: {'✔ YES' if res.get('checksum_verified') else '❌ NO'}")
                 self.log(f"   • Saved to Laptop : {res['local_output_path']}")
@@ -929,19 +1167,36 @@ class TaskOffloaderApp(ctk.CTk):
                         self.log(f"   ... ({len(res['server_logs_text'].splitlines()) - 15} more lines in log file)")
 
                 log_info = f"\n• Server Log File : {os.path.basename(res['local_log_path']) if res.get('local_log_path') else 'Attached'}"
-                msg = (
-                    f"🎉 Video Successfully Rendered on Server (Computer B)!\n\n"
-                    f"• Source File     : {video_name}\n"
-                    f"• Render Engine   : {res.get('engine')}\n"
-                    f"• Upload Time     : {res['upload_duration_sec']} seconds\n"
-                    f"• Render Time     : {res['remote_compute_duration_sec']} seconds\n"
-                    f"• Download Time   : {res['download_duration_sec']} seconds\n"
-                    f"• Total Time      : {res['total_turnaround_sec']} seconds\n"
-                    f"• Integrity Check : SHA-256 Verified ✔{log_info}\n\n"
-                    f"The rendered file & execution logs are ready in client_downloads/.\n"
-                    f"Click '▶️ Play Video' to watch or '📄 View Logs' to inspect details!"
-                )
-                self.run_on_ui(lambda: messagebox.showinfo("Render Complete & Downloaded!", msg))
+                if is_concat:
+                    msg = (
+                        f"🎉 Complete Combined Video Successfully Rendered on Server (Computer B)!\n\n"
+                        f"• Combined Parts   : {len(selected_files)} video parts stitched into 1 complete video\n"
+                        f"• Render Engine    : {res.get('engine')}\n"
+                        f"• Output Video     : {out_name}\n"
+                        f"• Upload Time      : {res['upload_duration_sec']} seconds\n"
+                        f"• Render Time      : {res['remote_compute_duration_sec']} seconds\n"
+                        f"• Download Time    : {res['download_duration_sec']} seconds\n"
+                        f"• Total Time       : {res['total_turnaround_sec']} seconds\n"
+                        f"• Integrity Check  : SHA-256 Verified ✔{log_info}\n\n"
+                        f"The combined video & server execution logs are ready in client_downloads/.\n"
+                        f"Click '▶️ Play Video' to watch or '📄 View Logs' to inspect details!"
+                    )
+                    self.run_on_ui(lambda: messagebox.showinfo("Combined Video Ready & Downloaded!", msg))
+                else:
+                    msg = (
+                        f"🎉 Video Successfully Rendered on Server (Computer B)!\n\n"
+                        f"• Source File     : {os.path.basename(selected_files[0])}\n"
+                        f"• Render Engine   : {res.get('engine')}\n"
+                        f"• Output Video    : {out_name}\n"
+                        f"• Upload Time     : {res['upload_duration_sec']} seconds\n"
+                        f"• Render Time     : {res['remote_compute_duration_sec']} seconds\n"
+                        f"• Download Time   : {res['download_duration_sec']} seconds\n"
+                        f"• Total Time      : {res['total_turnaround_sec']} seconds\n"
+                        f"• Integrity Check : SHA-256 Verified ✔{log_info}\n\n"
+                        f"The rendered file & execution logs are ready in client_downloads/.\n"
+                        f"Click '▶️ Play Video' to watch or '📄 View Logs' to inspect details!"
+                    )
+                    self.run_on_ui(lambda: messagebox.showinfo("Render Complete & Downloaded!", msg))
 
             except Exception as e:
                 self.log(f"❌ [OFFLOAD FAILED] {e}")
@@ -954,6 +1209,7 @@ class TaskOffloaderApp(ctk.CTk):
                 self.is_processing = False
 
         threading.Thread(target=run_thread, daemon=True).start()
+
 
     def _handle_list_shared_files(self):
         """Queries and displays files available in Server storage."""
