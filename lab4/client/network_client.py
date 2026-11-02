@@ -45,6 +45,34 @@ class OffloadingClient:
             self.sock.connect((self.host, self.port))
             self.is_connected = True
             return True
+        except socket.timeout:
+            self.disconnect()
+            raise ConnectionError(
+                f"Connection to {self.host}:{self.port} TIMED OUT.\n"
+                f"Possible causes:\n"
+                f"  • Windows Firewall on Server is blocking Port {self.port}\n"
+                f"  • Static IP not set (check for 169.254.x.x APIPA addresses)\n"
+                f"  • LAN cable not properly connected"
+            )
+        except ConnectionRefusedError:
+            self.disconnect()
+            raise ConnectionError(
+                f"Connection to {self.host}:{self.port} REFUSED.\n"
+                f"The Server application is not running on Computer B.\n"
+                f"Start the Server first: run_server.bat or python server_daemon.py"
+            )
+        except OSError as e:
+            self.disconnect()
+            err_code = getattr(e, 'winerror', 0) or getattr(e, 'errno', 0)
+            if err_code == 10065 or err_code == 113:
+                raise ConnectionError(
+                    f"Host {self.host} is UNREACHABLE (No route to host).\n"
+                    f"Both computers must be on the same subnet:\n"
+                    f"  • Computer A: 192.168.1.10 / 255.255.255.0\n"
+                    f"  • Computer B: 192.168.1.20 / 255.255.255.0\n"
+                    f"Set Static IP: ncpa.cpl > Ethernet > IPv4 Properties"
+                )
+            raise ConnectionError(f"Could not connect to Remote Worker at {self.host}:{self.port} -> {e}")
         except Exception as e:
             self.disconnect()
             raise ConnectionError(f"Could not connect to Remote Worker at {self.host}:{self.port} -> {e}")

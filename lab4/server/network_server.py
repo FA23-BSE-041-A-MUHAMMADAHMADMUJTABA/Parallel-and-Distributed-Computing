@@ -88,6 +88,32 @@ class RemoteWorkerServer:
         self.log(f"[*] CPU Cores              : {self.sys_info['cpu_count']}")
         self.log(f"[*] GPU/NVENC Acceleration : {self.sys_info['nvenc_status']}")
         self.log(f"[*] Protocol Version       : {PROTOCOL_VERSION}")
+
+        # Detect and display LAN IP addresses for Computer A to use
+        try:
+            from utils import get_all_local_ips
+            local_ips = get_all_local_ips()
+            lan_ips = [ip for ip in local_ips if not ip.startswith("127.")]
+            if lan_ips:
+                self.log(f"[*] LAN IP for Computer A  : {', '.join(lan_ips)}")
+            else:
+                self.log("[!] WARNING: No LAN IP detected. Computer A may not be able to connect.")
+        except Exception:
+            pass
+
+        # Warn about APIPA (169.254.x.x) addresses indicating Static IP not set
+        try:
+            import subprocess as _sp
+            _ipc = _sp.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+            if "169.254." in _ipc.stdout:
+                self.log("[!] WARNING: APIPA address (169.254.x.x) detected on Ethernet adapter!")
+                self.log("    Static IP is NOT set. LAN cable clients cannot connect.")
+                self.log("    FIX: ncpa.cpl > Ethernet > IPv4: IP=192.168.1.20, Subnet=255.255.255.0")
+        except Exception:
+            pass
+
+        # Remind about Firewall
+        self.log(f"[*] Ensure Windows Firewall allows inbound TCP Port {self.port}")
         self.log("=" * 70)
         self.log("[*] Worker daemon listening for incoming client offload tasks...")
 

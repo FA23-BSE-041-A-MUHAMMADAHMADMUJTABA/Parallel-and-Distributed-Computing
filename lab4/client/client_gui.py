@@ -992,6 +992,43 @@ class TaskOffloaderApp(ctk.CTk):
                 self.run_on_ui(lambda: messagebox.showinfo("Connected to Server!", msg))
 
             except Exception as e:
+                # Detect specific LAN issues for helpful diagnostics
+                err_str = str(e)
+                diag_hints = []
+                diag_hints.append("1. Is Server GUI / Daemon running on Computer B?")
+                diag_hints.append("2. Are both computers connected with LAN cable?")
+                diag_hints.append("3. Is the IP address correct?")
+
+                # Check for APIPA (169.254.x.x) on this machine -> Static IP not set
+                try:
+                    import subprocess as _sp
+                    _ipc = _sp.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+                    if "169.254." in _ipc.stdout:
+                        diag_hints.append(
+                            "\n⚠️ APIPA (169.254.x.x) detected on this PC!\n"
+                            "   → Static IP is NOT set on your Ethernet adapter.\n"
+                            "   → QUICK FIX: Double-click 'setup_lan_ip_client.bat' to auto-fix!\n"
+                            "     (Or manual: ncpa.cpl > Ethernet > IPv4: 192.168.1.10 / 255.255.255.0)"
+                        )
+                except Exception:
+                    pass
+
+                if "timed out" in err_str.lower() or "10060" in err_str:
+                    diag_hints.append(
+                        "\n🔥 Connection TIMED OUT — likely causes:\n"
+                        "   → Windows Firewall blocking Port 5000 on Server.\n"
+                        "   → Run on Server (Admin): netsh advfirewall firewall\n"
+                        "     add rule name=\"Lab4\" dir=in action=allow\n"
+                        "     protocol=TCP localport=5000"
+                    )
+                elif "10061" in err_str or "refused" in err_str.lower():
+                    diag_hints.append(
+                        "\n🔌 Connection REFUSED — Server app is not running\n"
+                        "   on the target machine, or wrong port number."
+                    )
+
+                hints_text = "\n".join(diag_hints)
+
                 def _update_err():
                     self.worker_status_lbl.configure(text="🔴 Server Status: UNREACHABLE", text_color="#f87171")
                     self.worker_specs_lbl.configure(text=f"Connection Error: {e}")
@@ -1001,10 +1038,7 @@ class TaskOffloaderApp(ctk.CTk):
                 self.run_on_ui(lambda: messagebox.showerror(
                     "Connection Failed",
                     f"Could not connect to Server at {host}:{port}.\n\n"
-                    f"Check:\n"
-                    f"1. Is Server GUI / Daemon running on Computer B?\n"
-                    f"2. Are both computers connected with LAN cable?\n"
-                    f"3. Is the IP address correct?"
+                    f"Diagnostics:\n{hints_text}"
                 ))
 
         threading.Thread(target=task, daemon=True).start()

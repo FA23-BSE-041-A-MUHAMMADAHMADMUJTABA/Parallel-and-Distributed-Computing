@@ -207,25 +207,41 @@ def generate_sample_video(
 def get_all_local_ips() -> list:
     """
     Detects all active IPv4 addresses for network adapters on this machine.
+    Filters out APIPA (169.254.x.x) link-local addresses that indicate
+    unconfigured Ethernet adapters without Static IP assignments.
     """
     import socket
     ip_list = []
-    
+
+    # Method 1: Primary outbound IP via UDP probe
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
         s.connect(("10.255.255.255", 1))
         primary_ip = s.getsockname()[0]
-        if primary_ip and primary_ip != "127.0.0.1" and primary_ip not in ip_list:
+        if primary_ip and primary_ip != "127.0.0.1" and not primary_ip.startswith("169.254.") and primary_ip not in ip_list:
             ip_list.append(primary_ip)
         s.close()
     except Exception:
         pass
 
+    # Method 2: All IPs from hostname resolution
     try:
         host_info = socket.gethostbyname_ex(socket.gethostname())
         for ip in host_info[2]:
-            if not ip.startswith("127.") and ip not in ip_list:
+            if not ip.startswith("127.") and not ip.startswith("169.254.") and ip not in ip_list:
+                ip_list.append(ip)
+    except Exception:
+        pass
+
+    # Method 3: Parse ipconfig output for all IPv4 addresses (Windows-specific, catches static IPs)
+    try:
+        import subprocess
+        result = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+        import re
+        for match in re.finditer(r"IPv4 Address[.\s]*:\s*(\d+\.\d+\.\d+\.\d+)", result.stdout):
+            ip = match.group(1)
+            if not ip.startswith("127.") and not ip.startswith("169.254.") and ip not in ip_list:
                 ip_list.append(ip)
     except Exception:
         pass
