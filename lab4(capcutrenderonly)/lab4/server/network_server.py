@@ -1,0 +1,770 @@
+"""
+================================================================================
+CSC-334: Parallel and Distributed Computing
+Lab 4: Custom Distributed Task Offloading & Remote GPU Rendering System
+Module: server/network_server.py
+Description: Multi-threaded Network Listener, Protocol Handler, Task Execution & File Sharing.
+================================================================================
+"""
+
+import os
+import time
+import socket
+import select
+import hashlib
+import threading
+from typing import Dict, Any, Optional, List, Callable
+
+from protocol import (
+    MsgType, send_packet, send_json, read_packet, read_json,
+    CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION,
+    DISCOVERY_PORT, DISCOVERY_MAGIC, DISCOVERY_RESP
+)
+from utils import compute_sha256, format_bytes, detect_system_capabilities
+from task_queue import TaskQueueManager, TaskItem, TaskStatus
+from execution_engine import RemoteExecutionEngine
+
+
+class RemoteWorkerServer:
+    """
+    Core Server Daemon that listens for client connections, processes handshakes,
+    streams files with checksum verification, executes tasks on remote GPU/CPU,
+    and supports LAN file sharing and GUI monitoring.
+    """
+    def __init__(self, host: str = "0.0.0.0", port: int = 5000, storage_dir: str = "server_storage"):
+        self.host = host
+        self.port = port
+        self.storage_dir = os.path.abspath(storage_dir)
+        os.makedirs(self.storage_dir, exist_ok=True)
+
+        self.queue_manager = TaskQueueManager()
+        self.engine = RemoteExecutionEngine()
+        self.sys_info = detect_system_capabilities()
+
+        self._server_sock: Optional[socket.socket] = None
+        self._shutdown_event = threading.Event()
+        self._lock = threading.Lock()
+        self.active_clients = 0
+        self.connected_clients: Dict[str, Dict[str, Any]] = {}
+        self.total_tasks_completed = 0
+        self.start_time: float = 0.0
+
+        # Optional GUI / Monitoring callbacks
+        self.on_client_connected: Optional[Callable[[Dict[str, Any]], None]] = None
+        self.on_client_disconnected: Optional[Callable[[Dict[str, Any]], None]] = None
+        self.on_task_update: Optional[Callable[[Dict[str, Any]], None]] = None
+        self.on_log: Optional[Callable[[str], None]] = None
+        self.on_error: Optional[Callable[[str], None]] = None
+
+    def log(self, msg: str) -> None:
+        """Centralized logger that prints to stdout safely and notifies GUI listeners."""
+        try:
+            print(msg)
+        except UnicodeEncodeError:
+            try:
+                print(msg.encode("ascii", errors="replace").decode("ascii"))
+            except Exception:
+                pass
+        if self.on_log:
+            try:
+                self.on_log(msg)
+            except Exception:
+                pass
+
+    def start(self) -> None:
+        """Starts the server listener and worker thread pool."""
+        try:
+            self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._server_sock.bind((self.host, self.port))
+            self._server_sock.listen(10)
+            self._server_sock.settimeout(1.0)  # Non-blocking accept check for clean shutdown
+            self.start_time = time.time()
+        except Exception as exc:
+            message = f"Could not bind/listen on {self.host}:{self.port}: {exc}"
+            self.log(f"[SERVER START ERROR] {message}")
+            if self.on_error:
+                try:
+                    self.on_error(message)
+                except Exception:
+                    pass
+            self.stop()
+            return
+
+        self.log("=" * 70)
+        self.log("  REMOTE GPU & DISTRIBUTED COMPUTE SERVER DAEMON (CSC-334)")
+        self.log("=" * 70)
+        self.log(f"[*] Bound to Address       : {self.host}:{self.port}")
+        self.log(f"[*] Storage Directory      : {self.storage_dir}")
+        self.log(f"[*] Node Hostname          : {self.sys_info['hostname']}")
+        self.log(f"[*] Platform OS            : {self.sys_info['os']}")
+        self.log(f"[*] CPU Cores              : {self.sys_info['cpu_count']}")
+        self.log(f"[*] GPU/NVENC Acceleration : {self.sys_info['nvenc_status']}")
+        self.log(f"[*] Protocol Version       : {PROTOCOL_VERSION}")
+
+        # Detect and display LAN IP addresses for Computer A to use
+        try:
+            from utils import get_all_local_ips
+            local_ips = get_all_local_ips()
+            lan_ips = [ip for ip in local_ips if not ip.startswith("127.")]
+            if lan_ips:
+                self.log(f"[*] LAN IP for Computer A  : {', '.join(lan_ips)}")
+            else:
+                self.log("[!] WARNING: No LAN IP detected. Computer A may not be able to connect.")
+        except Exception:
+            pass
+
+        # Direct Ethernet links may use Windows link-local 169.254.x.x addresses.
+        # The zero-config discovery probe includes the link-local broadcast, so
+        # no fixed/static IPv4 assignment is required for supported direct links.
+        try:
+            import subprocess as _sp
+            _ipc = _sp.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+            if "169.254." in _ipc.stdout:
+                self.log("[*] Link-local Ethernet address detected; automatic discovery will try the 169.254/16 LAN.")
+        except Exception:
+            pass
+
+        # Remind about Firewall
+        self.log(f"[*] LAN access: TCP {self.port} + UDP discovery {DISCOVERY_PORT} (private LAN firewall rules are requested at app startup)")
+        self.log("=" * 70)
+        self.log("[*] Worker daemon listening for incoming client offload tasks...")
+
+        # Start background UDP auto-discovery responder & beacon
+        discovery_thread = threading.Thread(target=self._discovery_responder_loop, daemon=True)
+        discovery_thread.start()
+
+        # Start background task queue execution thread
+        worker_thread = threading.Thread(target=self._queue_worker_loop, daemon=True)
+        worker_thread.start()
+
+        try:
+            while not self._shutdown_event.is_set():
+                try:
+                    client_sock, client_addr = self._server_sock.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+
+                with self._lock:
+                    self.active_clients += 1
+                
+                self.log(f"\n[+] [CLIENT CONNECTED] Incoming connection from: {client_addr[0]}:{client_addr[1]}")
+                handler_thread = threading.Thread(
+                    target=self._handle_client_connection,
+                    args=(client_sock, client_addr),
+                    daemon=True
+                )
+                handler_thread.start()
+        finally:
+            self.stop()
+
+    def stop(self) -> None:
+        """Gracefully shuts down the server daemon."""
+        self._shutdown_event.set()
+        if self._server_sock:
+            try:
+                self._server_sock.close()
+            except Exception:
+                pass
+        self.log("[-] Remote Worker Server Daemon stopped gracefully.")
+
+    def _handle_client_connection(self, sock: socket.socket, addr: tuple) -> None:
+        """Handles an interactive client session."""
+        sock.settimeout(None)  # Keep persistent connection alive for interactive GUI
+        addr_key = f"{addr[0]}:{addr[1]}"
+        client_record = {
+            "addr": addr_key,
+            "ip": addr[0],
+            "port": addr[1],
+            "client_id": "Initializing...",
+            "connected_at": time.time(),
+            "status": "CONNECTED",
+            "tasks_count": 0
+        }
+
+        with self._lock:
+            self.connected_clients[addr_key] = client_record
+
+        try:
+            while not self._shutdown_event.is_set():
+                try:
+                    msg_type, payload = read_packet(sock)
+                except (socket.timeout, ConnectionResetError, EOFError):
+                    break
+
+                # 1. TASK 1: Robust Handshake Protocol
+                if msg_type == MsgType.HANDSHAKE_SYN:
+                    import json
+                    client_meta = json.loads(payload.decode("utf-8")) if payload else {}
+                    client_id = client_meta.get("client_id", "unknown_client")
+                    
+                    with self._lock:
+                        if addr_key in self.connected_clients:
+                            self.connected_clients[addr_key]["client_id"] = client_id
+                            self.connected_clients[addr_key]["status"] = "AUTHENTICATED"
+
+                    self.log(f"[+] [HANDSHAKE ESTABLISHED] Client Computer '{client_id}' ({addr[0]}) verified protocol v{PROTOCOL_VERSION}!")
+                    self.log(f"   Node ready to receive video render tasks & file shares from {addr[0]}")
+                    
+                    if self.on_client_connected:
+                        try:
+                            self.on_client_connected(self.connected_clients[addr_key])
+                        except Exception:
+                            pass
+
+                    ack_data = {
+                        "status": "READY",
+                        "server_time": time.time(),
+                        "hostname": self.sys_info["hostname"],
+                        "os": self.sys_info["os"],
+                        "cpu_count": self.sys_info["cpu_count"],
+                        "nvenc_available": self.sys_info["nvenc_available"],
+                        "nvenc_status": self.sys_info["nvenc_status"],
+                        "cuda_available": self.sys_info["cuda_available"],
+                        "queue_size": self.queue_manager.get_queue_size(),
+                        "protocol_version": PROTOCOL_VERSION
+                    }
+                    send_json(sock, MsgType.HANDSHAKE_ACK, ack_data)
+
+                # 2. TASK 1: Initial Latency / Ping Check
+                elif msg_type == MsgType.PING_REQ:
+                    import json
+                    ping_data = json.loads(payload.decode("utf-8")) if payload else {}
+                    pong_data = {
+                        "client_send_time": ping_data.get("client_timestamp", time.time()),
+                        "server_receive_time": time.time(),
+                        "active_workers": self.queue_manager.get_active_count()
+                    }
+                    send_json(sock, MsgType.PONG_RESP, pong_data)
+
+                # 3. TASK 2 & 4: Job Submission & Video Render Offloading
+                elif msg_type == MsgType.JOB_SUBMIT:
+                    with self._lock:
+                        if addr_key in self.connected_clients:
+                            self.connected_clients[addr_key]["status"] = "EXECUTING_TASK"
+                            self.connected_clients[addr_key]["tasks_count"] += 1
+
+                    self._process_job_submission(sock, payload, addr)
+
+                    with self._lock:
+                        if addr_key in self.connected_clients:
+                            self.connected_clients[addr_key]["status"] = "IDLE"
+
+                # 4. TASK 4: Download Processed Output or Shared File
+                elif msg_type == MsgType.DOWNLOAD_REQ:
+                    self._process_download_request(sock, payload)
+
+                # 5. Direct File Sharing: List Shared Files on Server
+                elif msg_type == MsgType.FILE_LIST_REQ:
+                    files = self.get_shared_files()
+                    send_json(sock, MsgType.FILE_LIST_RESP, {"files": files})
+
+                # 6. Direct File Sharing: Upload File to Shared Storage
+                elif msg_type == MsgType.FILE_SHARE_UP:
+                    self._process_file_share_upload(sock, payload, addr)
+
+                # 7. Full editable CapCut timeline handoff (draft + local assets).
+                elif msg_type == MsgType.CAPCUT_IMPORT_REQ:
+                    self._process_capcut_import_request(sock, payload, addr)
+
+                # 8. Cancel Request
+                elif msg_type == MsgType.CANCEL_REQ:
+                    import json
+                    req = json.loads(payload.decode("utf-8")) if payload else {}
+                    task_id = req.get("task_id", "")
+                    cancelled = self.queue_manager.cancel_task(task_id)
+                    send_json(sock, MsgType.JOB_RESULT, {"task_id": task_id, "status": "CANCELLED" if cancelled else "NOT_FOUND"})
+
+                else:
+                    self.log(f"[!] Unknown message type received: {msg_type!r}")
+
+        except Exception as e:
+            self.log(f"[!] Error handling client {addr}: {e}")
+        finally:
+            with self._lock:
+                self.active_clients = max(0, self.active_clients - 1)
+                disc_info = self.connected_clients.pop(addr_key, None)
+
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+            self.log(f"[-] [CLIENT DISCONNECTED] Client {addr[0]}:{addr[1]} disconnected.")
+            if self.on_client_disconnected and disc_info:
+                try:
+                    self.on_client_disconnected(disc_info)
+                except Exception:
+                    pass
+
+    def _process_job_submission(self, sock: socket.socket, payload: bytes, addr: tuple) -> None:
+        """Receives asset file(s), validates SHA-256 checksums, and schedules task."""
+        import json
+        meta = json.loads(payload.decode("utf-8"))
+        task_id = meta["task_id"]
+        task_type = meta["task_type"]
+        file_name = meta.get("file_name", f"{task_id}.dat")
+        expected_size = meta.get("file_size", 0)
+        expected_sha256 = meta.get("sha256", "")
+        config = meta.get("config", {})
+        files_meta = meta.get("files", [])
+        is_concat = meta.get("is_concat", False) or len(files_meta) > 1
+
+        if is_concat and len(files_meta) > 1:
+            self.log(f"\n[*] [CONCAT TASK RECEIVED] Task ID: {task_id} ({len(files_meta)} video parts to combine) from {addr[0]}")
+            self.log(f"   Total Asset Size: {format_bytes(expected_size)} across {len(files_meta)} parts")
+        else:
+            self.log(f"\n[*] [TASK RECEIVED] Task ID: {task_id} ({task_type}) from {addr[0]}")
+            if expected_size > 0:
+                self.log(f"   Incoming Asset: {file_name} ({format_bytes(expected_size)})")
+
+        # Acknowledge job submission
+        send_json(sock, MsgType.JOB_ACCEPTED, {"task_id": task_id, "status": "READY_FOR_UPLOAD", "is_concat": is_concat})
+
+        input_paths = []
+
+        # Case A: Multi-Part Video Concatenation Stream
+        if is_concat and len(files_meta) > 1:
+            for idx, f_item in enumerate(files_meta):
+                part_name = os.path.basename(f_item.get("file_name", f"part_{idx}.mp4"))
+                part_expected_sha = f_item.get("sha256", "")
+                part_expected_size = int(f_item.get("file_size", 0) or 0)
+                part_dest = os.path.join(self.storage_dir, f"in_{task_id}_{idx:03d}_{part_name}")
+
+                hasher = hashlib.sha256()
+                received_bytes = 0
+
+                with open(part_dest, "wb") as f:
+                    while True:
+                        chunk_type, chunk_data = read_packet(sock)
+                        if chunk_type == MsgType.FILE_CHUNK:
+                            f.write(chunk_data)
+                            hasher.update(chunk_data)
+                            received_bytes += len(chunk_data)
+                            if part_expected_size and received_bytes > part_expected_size:
+                                raise ValueError(f"Uploaded part {part_name} exceeds declared size.")
+                        elif chunk_type == MsgType.FILE_EOF:
+                            break
+                        else:
+                            raise ValueError(f"Unexpected chunk type during part upload: {chunk_type!r}")
+
+                computed_sha = hasher.hexdigest()
+                if part_expected_size and received_bytes != part_expected_size:
+                    self.log(f"[!] SIZE MISMATCH on part {part_name}: expected {part_expected_size}, received {received_bytes}")
+                    send_json(sock, MsgType.ERROR, {"error": f"Uploaded part size mismatch: {part_name}."})
+                    try:
+                        os.remove(part_dest)
+                    except OSError:
+                        pass
+                    return
+                if part_expected_sha and computed_sha.lower() != part_expected_sha.lower():
+                    self.log(f"[!] CHECKSUM MISMATCH on part {idx+1}/{len(files_meta)} ({part_name})!")
+                    send_json(sock, MsgType.ERROR, {"error": f"Checksum verification failed on part {part_name}."})
+                    for p in input_paths:
+                        if os.path.exists(p):
+                            try:
+                                os.remove(p)
+                            except Exception:
+                                pass
+                    if os.path.exists(part_dest):
+                        try:
+                            os.remove(part_dest)
+                        except Exception:
+                            pass
+                    return
+
+                input_paths.append(part_dest)
+                self.log(f"   [+] Part {idx+1:02d}/{len(files_meta)} received & verified: {part_name} ({format_bytes(received_bytes)}) ✔")
+
+            self.log(f"[*] [ALL PARTS VERIFIED] All {len(input_paths)} video parts received successfully with 100% SHA-256 integrity!")
+            output_path = os.path.join(self.storage_dir, f"out_{task_id}_combined.mp4")
+            task_item = TaskItem(task_id, task_type, config, input_paths[0], output_path, input_paths=input_paths, is_concat=True)
+
+        # Case B: Single Asset Video / Script Task
+        else:
+            input_path = os.path.join(self.storage_dir, f"in_{task_id}_{os.path.basename(file_name)}") if file_name else ""
+            if files_meta:
+                expected_size = int(files_meta[0].get("file_size", expected_size) or expected_size)
+                expected_sha256 = files_meta[0].get("sha256", expected_sha256) or expected_sha256
+            if expected_size > 0:
+                received_bytes = 0
+                hasher = hashlib.sha256()
+
+                with open(input_path, "wb") as f:
+                    while True:
+                        chunk_type, chunk_data = read_packet(sock)
+                        if chunk_type == MsgType.FILE_CHUNK:
+                            f.write(chunk_data)
+                            hasher.update(chunk_data)
+                            received_bytes += len(chunk_data)
+                            if expected_size and received_bytes > expected_size:
+                                raise ValueError("Uploaded asset exceeds its declared size.")
+                        elif chunk_type == MsgType.FILE_EOF:
+                            break
+                        else:
+                            raise ValueError(f"Unexpected chunk type during upload: {chunk_type!r}")
+
+                if expected_size and received_bytes != expected_size:
+                    send_json(sock, MsgType.ERROR, {"error": f"Uploaded asset size mismatch: expected {expected_size}, received {received_bytes}."})
+                    try:
+                        os.remove(input_path)
+                    except OSError:
+                        pass
+                    return
+                computed_sha256 = hasher.hexdigest()
+                self.log(f"   Upload Complete. SHA-256: {computed_sha256[:12]}...")
+
+                # File Integrity Verification Checksum
+                if expected_sha256 and computed_sha256.lower() != expected_sha256.lower():
+                    self.log(f"[!] CHECKSUM MISMATCH for {file_name}! Expected: {expected_sha256}, Got: {computed_sha256}")
+                    send_json(sock, MsgType.ERROR, {"error": "Checksum verification failed. Corrupted transfer."})
+                    if os.path.exists(input_path):
+                        os.remove(input_path)
+                    return
+                else:
+                    self.log(f"   [INTEGRITY] SHA-256 checksum verified successfully!")
+            else:
+                input_path = ""
+
+            # Prepare output path based on task type
+            if task_type == "video_transcode":
+                out_ext = ".mp4"
+            elif task_type in ["custom_script", "python_task"]:
+                out_ext = ".json"
+            else:
+                out_ext = ".json"
+
+            output_path = os.path.join(self.storage_dir, f"out_{task_id}{out_ext}")
+            task_item = TaskItem(task_id, task_type, config, input_path, output_path, input_paths=[input_path] if input_path else [], is_concat=False)
+
+        task_item.client_socket = sock
+
+        # Add to Task Queue
+        self.queue_manager.submit_task(task_item)
+
+        # Directly monitor execution on this socket channel
+        self._stream_task_execution(task_item, sock)
+
+    def _stream_task_execution(self, task: TaskItem, sock: socket.socket) -> None:
+        """Executes task and streams real-time progress directly to client socket."""
+        task.status = TaskStatus.RUNNING
+        task.start_time = time.time()
+
+        def progress_callback(percent: float, fps: float, speed: str, eta: float, status_text: str):
+            task.progress_percent = percent
+            task.current_fps = fps
+            task.speed_multiplier = speed
+            progress_packet = {
+                "task_id": task.task_id,
+                "percent": round(percent, 1),
+                "fps": round(fps, 1),
+                "speed": speed,
+                "eta_seconds": round(eta, 1),
+                "status": status_text
+            }
+            try:
+                send_json(sock, MsgType.PROGRESS, progress_packet)
+            except Exception:
+                pass
+
+            if self.on_task_update:
+                try:
+                    self.on_task_update({
+                        "task_id": task.task_id,
+                        "task_type": task.task_type,
+                        "percent": percent,
+                        "status": status_text
+                    })
+                except Exception:
+                    pass
+
+        try:
+            # 1. Video Transcoding Workload (Single or Concatenation)
+            if task.task_type == "video_transcode":
+                if getattr(task, "is_concat", False) and len(getattr(task, "input_paths", [])) > 1:
+                    res = self.engine.execute_video_concat(
+                        task.input_paths,
+                        task.output_path,
+                        task.config,
+                        progress_callback=progress_callback,
+                        check_cancelled=lambda: task.is_cancelled
+                    )
+                else:
+                    res = self.engine.execute_video_transcode(
+                        task.input_path,
+                        task.output_path,
+                        task.config,
+                        progress_callback=progress_callback,
+                        check_cancelled=lambda: task.is_cancelled
+                    )
+            # 2. CUDA / Tensor / NumPy Matrix Workload
+            elif task.task_type == "cuda_compute":
+
+                matrix_size = task.config.get("matrix_size", 1024)
+                iterations = task.config.get("iterations", 10)
+                res = self.engine.execute_cuda_compute(
+                    matrix_size,
+                    iterations,
+                    task.output_path,
+                    progress_callback=progress_callback,
+                    check_cancelled=lambda: task.is_cancelled
+                )
+            # 3. Complex Project Python Script Workload
+            elif task.task_type in ["custom_script", "python_task"]:
+                res = self.engine.execute_custom_script(
+                    task.input_path,
+                    task.output_path,
+                    task.config,
+                    progress_callback=progress_callback,
+                    check_cancelled=lambda: task.is_cancelled
+                )
+            else:
+                res = {"success": False, "error": f"Unknown task type: {task.task_type}"}
+
+            task.end_time = time.time()
+            task.execution_duration = task.end_time - task.start_time
+
+            if res.get("success"):
+                task.status = TaskStatus.COMPLETED
+                self.total_tasks_completed += 1
+                output_size = os.path.getsize(task.output_path) if os.path.exists(task.output_path) else 0
+                output_sha256 = compute_sha256(task.output_path) if output_size > 0 else ""
+
+                log_file_name = res.get("log_file_name", "")
+                log_path = res.get("log_path", "")
+                log_size = os.path.getsize(log_path) if log_path and os.path.exists(log_path) else 0
+                log_sha256 = compute_sha256(log_path) if log_size > 0 else ""
+
+                result_payload = {
+                    "task_id": task.task_id,
+                    "status": "COMPLETED",
+                    "engine": res.get("engine", "Default"),
+                    "duration_sec": round(task.execution_duration, 3),
+                    "output_file_name": os.path.basename(task.output_path),
+                    "output_size_bytes": output_size,
+                    "output_sha256": output_sha256,
+                    "log_file_name": log_file_name,
+                    "log_size_bytes": log_size,
+                    "log_sha256": log_sha256,
+                    "logs_text": res.get("logs_text", ""),
+                    "metrics": res
+                }
+                self.log(f"[+] [TASK COMPLETE] Task {task.task_id} completed in {task.execution_duration:.2f}s using {res.get('engine')}")
+                if log_file_name:
+                    self.log(f"   [RENDER LOG] Execution log generated: {log_file_name} ({format_bytes(log_size)})")
+                send_json(sock, MsgType.JOB_RESULT, result_payload)
+            else:
+                task.status = TaskStatus.FAILED
+                task.error_message = res.get("error", "Unknown execution error")
+                self.log(f"[-] [TASK FAILED] Task {task.task_id}: {task.error_message}")
+                send_json(sock, MsgType.ERROR, {"task_id": task.task_id, "error": task.error_message})
+
+        except Exception as e:
+            task.status = TaskStatus.FAILED
+            task.error_message = str(e)
+            self.log(f"[TASK EXCEPTION] Task {task.task_id}: {e}")
+            send_json(sock, MsgType.ERROR, {"task_id": task.task_id, "error": str(e)})
+
+    def _process_capcut_import_request(self, sock: socket.socket, payload: bytes, addr: tuple) -> None:
+        """Restore a previously uploaded full CapCut draft package on this PC."""
+        import json
+        from capcut_project import import_capcut_bundle
+
+        request = json.loads(payload.decode("utf-8")) if payload else {}
+        file_name = str(request.get("file_name", ""))
+        safe_name = file_name.replace("\\", "/").split("/")[-1]
+        if not safe_name.startswith("capcut_project_") or not safe_name.lower().endswith(".zip"):
+            send_json(sock, MsgType.ERROR, {"error": "Invalid CapCut project package name."})
+            return
+        bundle_path = os.path.join(self.storage_dir, safe_name)
+        if not os.path.isfile(bundle_path):
+            send_json(sock, MsgType.ERROR, {"error": "Uploaded CapCut project package was not found on Computer B."})
+            return
+
+        self.log(f"[*] [CAPCUT HANDOFF] Restoring full editable draft from {addr[0]}: {safe_name}")
+        try:
+            result = import_capcut_bundle(bundle_path, launch_app=True)
+            try:
+                os.remove(bundle_path)
+            except OSError:
+                pass
+            self.log(f"[+] [CAPCUT HANDOFF] Draft restored: {result['project_folder']}")
+            if result.get("capcut_started"):
+                self.log("[+] [CAPCUT] CapCut Desktop launched on Computer B. Select the transferred project and export there.")
+            else:
+                self.log(f"[!] [CAPCUT] Draft restored, but CapCut did not launch: {result.get('launch_error', 'not found')}")
+            send_json(sock, MsgType.CAPCUT_IMPORT_RESP, result)
+        except Exception as exc:
+            self.log(f"[-] [CAPCUT HANDOFF FAILED] {exc}")
+            send_json(sock, MsgType.ERROR, {"error": f"CapCut project restore failed: {exc}"})
+
+    def _process_file_share_upload(self, sock: socket.socket, payload: bytes, addr: tuple) -> None:
+        """Receives a file directly shared from client to server storage without job execution."""
+        import json
+        meta = json.loads(payload.decode("utf-8"))
+        file_name = str(meta.get("file_name", "shared_file.dat"))
+        safe_name = file_name.replace("\\", "/").split("/")[-1]
+        file_size = int(meta.get("file_size", 0) or 0)
+        expected_sha256 = meta.get("sha256", "")
+        if not safe_name or safe_name in {".", ".."}:
+            send_json(sock, MsgType.ERROR, {"error": "Invalid shared filename."})
+            return
+
+        dest_path = os.path.join(self.storage_dir, safe_name)
+        self.log(f"[*] [FILE SHARE] Incoming file from {addr[0]}: {file_name} ({format_bytes(file_size)})")
+
+        send_json(sock, MsgType.FILE_SHARE_ACK, {"status": "READY_TO_RECEIVE"})
+
+        hasher = hashlib.sha256()
+        received_bytes = 0
+        with open(dest_path, "wb") as f:
+            while True:
+                c_type, c_data = read_packet(sock)
+                if c_type == MsgType.FILE_CHUNK:
+                    f.write(c_data)
+                    hasher.update(c_data)
+                    received_bytes += len(c_data)
+                    if file_size and received_bytes > file_size:
+                        raise ValueError("Shared file exceeded its declared size.")
+                elif c_type == MsgType.FILE_EOF:
+                    break
+                else:
+                    raise ValueError(f"Unexpected packet during shared upload: {c_type!r}")
+
+        computed_sha = hasher.hexdigest()
+        size_ok = not file_size or received_bytes == file_size
+        verified = size_ok and ((computed_sha.lower() == expected_sha256.lower()) if expected_sha256 else True)
+
+        if verified:
+            self.log(f"[+] [FILE SAVED] {safe_name} saved to shared storage. Size and SHA-256 verified.")
+            send_json(sock, MsgType.FILE_SHARE_ACK, {"status": "SUCCESS", "file_name": safe_name, "sha256": computed_sha})
+        else:
+            self.log(f"[-] [FILE ERROR] Checksum mismatch for {file_name}")
+            send_json(sock, MsgType.ERROR, {"error": "Checksum mismatch during file share."})
+
+    def _process_download_request(self, sock: socket.socket, payload: bytes) -> None:
+        """Streams rendered output file or shared file back to client in chunks with SHA-256 validation."""
+        import json
+        req = json.loads(payload.decode("utf-8"))
+        task_id = req.get("task_id", "")
+        file_name = str(req.get("file_name", ""))
+        if not file_name or "/" in file_name or "\\" in file_name or file_name in {".", ".."}:
+            send_json(sock, MsgType.ERROR, {"error": "Invalid download filename."})
+            return
+
+        file_path = os.path.join(self.storage_dir, file_name)
+        if not os.path.exists(file_path):
+            send_json(sock, MsgType.ERROR, {"error": f"File '{file_name}' not found on server"})
+            return
+
+        file_size = os.path.getsize(file_path)
+        sha256 = compute_sha256(file_path)
+        self.log(f"[*] [STREAMING FILE] Streaming {file_name} ({format_bytes(file_size)}) to client...")
+
+        # Send download metadata header
+        send_json(sock, MsgType.JOB_ACCEPTED, {"file_name": file_name, "file_size": file_size, "sha256": sha256})
+
+        # Stream chunks
+        with open(file_path, "rb") as f:
+            while chunk := f.read(CHUNK_SIZE):
+                send_packet(sock, MsgType.FILE_CHUNK, chunk)
+
+        # Send EOF
+        send_packet(sock, MsgType.FILE_EOF, sha256.encode("utf-8"))
+        self.log(f"[+] [DOWNLOAD COMPLETE] Successfully streamed {file_name} to client.")
+
+    def get_shared_files(self) -> List[Dict[str, Any]]:
+        """Returns details of all files stored in server_storage for file sharing."""
+        results = []
+        if not os.path.exists(self.storage_dir):
+            return results
+
+        for fname in os.listdir(self.storage_dir):
+            fpath = os.path.join(self.storage_dir, fname)
+            if os.path.isfile(fpath):
+                stat = os.stat(fpath)
+                results.append({
+                    "name": fname,
+                    "size_bytes": stat.st_size,
+                    "size_str": format_bytes(stat.st_size),
+                    "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+                })
+        results.sort(key=lambda x: x["name"])
+        return results
+
+    def get_active_clients_list(self) -> List[Dict[str, Any]]:
+        """Returns snapshot of connected clients for GUI display."""
+        with self._lock:
+            return list(self.connected_clients.values())
+
+    def _queue_worker_loop(self) -> None:
+        """Background worker thread loop for task queue execution."""
+        while not self._shutdown_event.is_set():
+            task = self.queue_manager.get_task(timeout=1.0)
+            if task:
+                self.queue_manager.task_done()
+
+    def _discovery_responder_loop(self) -> None:
+        """
+        Listens on UDP DISCOVERY_PORT for discovery pings from client laptops,
+        and broadcasts periodic beacons to announce server presence on all LAN adapters.
+        """
+        import json
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            udp_sock.bind(("", DISCOVERY_PORT))
+            udp_sock.settimeout(1.0)
+            self.log(f"[*] Auto-Discovery service active on UDP port {DISCOVERY_PORT}")
+        except Exception as e:
+            self.log(f"[!] Warning: UDP Auto-Discovery port {DISCOVERY_PORT} unavailable: {e}")
+            return
+
+        last_beacon_time = 0.0
+
+        while not self._shutdown_event.is_set():
+            now = time.time()
+            # Periodically broadcast server beacon every 2.5 seconds
+            if now - last_beacon_time >= 2.5:
+                last_beacon_time = now
+                beacon_data = json.dumps({
+                    "magic": "DC_DISCOVERY_PONG",
+                    "hostname": self.sys_info.get("hostname", "Server"),
+                    "tcp_port": self.port,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "cpu_count": self.sys_info.get("cpu_count", 4),
+                    "nvenc_status": self.sys_info.get("nvenc_status", "N/A")
+                }).encode("utf-8")
+
+                # Send on global and adapter subnet broadcasts
+                for b_ip in ["255.255.255.255", "127.0.0.1", "192.168.1.255", "192.168.43.255", "169.254.255.255"]:
+                    try:
+                        udp_sock.sendto(beacon_data, (b_ip, DISCOVERY_PORT))
+                    except Exception:
+                        pass
+
+            try:
+                data, client_addr = udp_sock.recvfrom(2048)
+                if data and DISCOVERY_MAGIC in data:
+                    resp_data = json.dumps({
+                        "magic": "DC_DISCOVERY_PONG",
+                        "hostname": self.sys_info.get("hostname", "Server"),
+                        "tcp_port": self.port,
+                        "protocol_version": PROTOCOL_VERSION,
+                        "cpu_count": self.sys_info.get("cpu_count", 4),
+                        "nvenc_status": self.sys_info.get("nvenc_status", "N/A")
+                    }).encode("utf-8")
+                    udp_sock.sendto(resp_data, client_addr)
+                    self.log(f"[AUTO-DETECT] Answered discovery probe from {client_addr[0]}:{client_addr[1]}")
+            except socket.timeout:
+                continue
+            except Exception:
+                continue
+
+        try:
+            udp_sock.close()
+        except Exception:
+            pass

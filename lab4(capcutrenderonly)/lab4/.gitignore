@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary Storage & Downloads
+server/server_storage/
+client/client_downloads/
+client/sample_assets/test.mp4
+benchmarks/scratch/
+
+# PyInstaller / Windows release builds
+/build/
+/release/
+/.build_venv/
+*.spec
