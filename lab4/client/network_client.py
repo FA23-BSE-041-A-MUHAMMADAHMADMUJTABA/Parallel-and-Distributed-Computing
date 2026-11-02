@@ -456,7 +456,7 @@ class OffloadingClient:
         # Validate download integrity
         checksum_verified = (computed_out_sha256.lower() == expected_out_sha256.lower()) if expected_out_sha256 else True
 
-        # 5. Download Server Execution Log File
+        # 5. Download Server Execution Log File & Standardize logs.txt
         log_filename = result_payload.get("log_file_name", "")
         server_logs_text = result_payload.get("logs_text", "")
         local_log_path = ""
@@ -468,13 +468,14 @@ class OffloadingClient:
                     progress_callback({"status": "Downloading server execution logs...", "percent": 100.0})
                 send_json(self.sock, MsgType.DOWNLOAD_REQ, {"task_id": task_id, "file_name": log_filename})
                 msg_type, log_ack = read_json(self.sock)
-                with open(local_log_path, "wb") as f:
-                    while True:
-                        c_type, c_data = read_packet(self.sock)
-                        if c_type == MsgType.FILE_CHUNK:
-                            f.write(c_data)
-                        elif c_type == MsgType.FILE_EOF:
-                            break
+                if msg_type == MsgType.JOB_ACCEPTED:
+                    with open(local_log_path, "wb") as f:
+                        while True:
+                            c_type, c_data = read_packet(self.sock)
+                            if c_type == MsgType.FILE_CHUNK:
+                                f.write(c_data)
+                            elif c_type == MsgType.FILE_EOF:
+                                break
                 if not server_logs_text and os.path.exists(local_log_path):
                     with open(local_log_path, "r", encoding="utf-8", errors="ignore") as f:
                         server_logs_text = f.read()
@@ -494,6 +495,21 @@ class OffloadingClient:
                     f.write(server_logs_text)
             except Exception:
                 pass
+
+        # Always guarantee a standardized logs.txt file is saved in output_dir alongside the video
+        standard_logs_file = os.path.join(output_dir, "logs.txt")
+        try:
+            if local_log_path and os.path.exists(local_log_path):
+                if os.path.abspath(local_log_path) != os.path.abspath(standard_logs_file):
+                    import shutil
+                    shutil.copy2(local_log_path, standard_logs_file)
+            elif server_logs_text:
+                with open(standard_logs_file, "w", encoding="utf-8") as lf:
+                    lf.write(server_logs_text)
+            if os.path.exists(standard_logs_file):
+                local_log_path = standard_logs_file
+        except Exception:
+            pass
 
         total_turnaround_time = upload_duration + remote_compute_duration + download_duration
         network_overhead_time = upload_duration + download_duration

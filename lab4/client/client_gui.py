@@ -69,6 +69,9 @@ class TaskOffloaderApp(ctk.CTk):
         default_combined = os.path.join(self.download_output_dir, "combined_video.mp4")
         if os.path.exists(default_combined):
             self.last_rendered_path = default_combined
+        default_log = os.path.join(self.download_output_dir, "logs.txt")
+        if os.path.exists(default_log):
+            self.last_log_path = default_log
 
         # Thread-safe UI update queue
         self.ui_queue = queue.Queue()
@@ -542,6 +545,7 @@ class TaskOffloaderApp(ctk.CTk):
         )
         self.play_btn.pack(side="left", padx=(0, 6))
 
+        initial_log_state = "normal" if (self.last_log_path and os.path.exists(self.last_log_path)) else "disabled"
         self.view_log_btn = ctk.CTkButton(
             btn_row,
             text="📄 View Logs",
@@ -549,7 +553,7 @@ class TaskOffloaderApp(ctk.CTk):
             hover_color="#0f766e",
             height=30,
             width=95,
-            state="disabled",
+            state=initial_log_state,
             command=self._handle_view_server_logs
         )
         self.view_log_btn.pack(side="left", padx=(0, 6))
@@ -1263,9 +1267,9 @@ class TaskOffloaderApp(ctk.CTk):
                         import shutil
                         if os.path.exists(res['local_output_path']) and os.path.abspath(res['local_output_path']) != os.path.abspath(clean_output_path):
                             shutil.copy2(res['local_output_path'], clean_output_path)
-                            # Remove older temporary uuid-named combined outputs so only 1 clean copy exists
+                            # Remove older temporary uuid-named combined outputs so only 1 clean copy exists (only .mp4 videos)
                             for old_f in os.listdir(self.download_output_dir):
-                                if old_f.startswith("out_task_") and "_combined" in old_f:
+                                if old_f.startswith("out_task_") and "_combined" in old_f and old_f.endswith(".mp4"):
                                     try:
                                         os.remove(os.path.join(self.download_output_dir, old_f))
                                     except Exception:
@@ -1273,6 +1277,21 @@ class TaskOffloaderApp(ctk.CTk):
                             res['local_output_path'] = clean_output_path
                     except Exception:
                         pass
+
+                # Ensure logs.txt is saved directly into client_downloads folder alongside output video
+                clean_log_path = os.path.join(self.download_output_dir, "logs.txt")
+                try:
+                    import shutil
+                    if res.get('local_log_path') and os.path.exists(res['local_log_path']):
+                        if os.path.abspath(res['local_log_path']) != os.path.abspath(clean_log_path):
+                            shutil.copy2(res['local_log_path'], clean_log_path)
+                    elif res.get('server_logs_text'):
+                        with open(clean_log_path, "w", encoding="utf-8") as lf:
+                            lf.write(res['server_logs_text'])
+                    if os.path.exists(clean_log_path):
+                        res['local_log_path'] = clean_log_path
+                except Exception:
+                    pass
 
                 def _update_video_done():
                     self.progress_bar.set(1.0)
@@ -1282,7 +1301,7 @@ class TaskOffloaderApp(ctk.CTk):
                         self.progress_lbl.configure(text="100.0% | Complete & Downloaded to Laptop!")
                     self.metric_turnaround.configure(text=f"Turnaround: {res['total_turnaround_sec']} s")
                     self.last_rendered_path = res['local_output_path']
-                    self.last_log_path = res.get('local_log_path', '')
+                    self.last_log_path = res.get('local_log_path', '') or clean_log_path
                     self.play_btn.configure(state="normal")
                     if self.last_log_path and os.path.exists(self.last_log_path):
                         self.view_log_btn.configure(state="normal")
@@ -1482,11 +1501,22 @@ class TaskOffloaderApp(ctk.CTk):
             messagebox.showwarning("No Video", "No rendered video available yet. Please send a video for rendering first.")
 
     def _handle_view_server_logs(self):
-        """Opens the downloaded server execution log file."""
-        if self.last_log_path and os.path.exists(self.last_log_path):
+        """Opens the downloaded server execution log file (logs.txt)."""
+        log_candidate = self.last_log_path
+        if not (log_candidate and os.path.exists(log_candidate)):
+            fallback = os.path.join(self.download_output_dir, "logs.txt")
+            if os.path.exists(fallback):
+                log_candidate = fallback
+            else:
+                for f in os.listdir(self.download_output_dir):
+                    if f.endswith(".txt"):
+                        log_candidate = os.path.join(self.download_output_dir, f)
+                        break
+
+        if log_candidate and os.path.exists(log_candidate):
             try:
-                os.startfile(self.last_log_path)
-                self.log(f"[LOG VIEWER] Opened server execution log: {self.last_log_path}")
+                os.startfile(log_candidate)
+                self.log(f"[LOG VIEWER] Opened server execution log: {log_candidate}")
             except Exception as e:
                 self.log(f"[ERROR] Could not open log viewer: {e}")
         else:
