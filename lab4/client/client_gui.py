@@ -73,6 +73,22 @@ class TaskOffloaderApp(ctk.CTk):
         if os.path.exists(default_log):
             self.last_log_path = default_log
 
+        # CapCut Live Hook & Remote Render Farm State
+        self.capcut_drafts_dir = os.path.join(
+            os.environ.get('LOCALAPPDATA', ''),
+            'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'
+        )
+        default_capcut_export = os.path.join(os.environ.get('USERPROFILE', ''), 'Videos', 'CapCut')
+        if not os.path.exists(default_capcut_export):
+            default_capcut_export = os.path.join(self.download_output_dir, 'capcut_exports')
+            os.makedirs(default_capcut_export, exist_ok=True)
+        self.capcut_watch_dir = default_capcut_export
+        self.capcut_watch_active = False
+        self.capcut_watch_thread = None
+        self._known_capcut_files = set()
+        self.capcut_drafts_data = []
+        self.capcut_intercept_count = 0
+
         # Thread-safe UI update queue
         self.ui_queue = queue.Queue()
         self._poll_ui_queue()
@@ -131,15 +147,17 @@ class TaskOffloaderApp(ctk.CTk):
         sub_lbl.pack(anchor="w", padx=16, pady=(0, 10))
 
     def _build_tab_container(self):
-        """Builds tabs: Tab 1 = Video Editor Exports; Tab 2 = LAN File Sharing."""
+        """Builds tabs: Tab 1 = Multi-Part Combiner; Tab 2 = LAN Sharing; Tab 3 = CapCut Live Hook."""
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=16, pady=4)
 
-        self.tab_offload = self.tabview.add("📂 Video Editor Exports (CapCut/ClipChamp)")
+        self.tab_offload = self.tabview.add("🎬 Multi-Part Video Combiner & Offload")
         self.tab_sharing = self.tabview.add("📁 LAN File Sharing Hub")
+        self.tab_capcut = self.tabview.add("⚡ CapCut Remote Render & Live Watch")
 
         self._build_offload_tab()
         self._build_sharing_tab()
+        self._build_capcut_tab()
 
     def _build_offload_tab(self):
         """Tab 1: Folder browser for third-party video editor exports + server rendering."""
@@ -653,6 +671,544 @@ class TaskOffloaderApp(ctk.CTk):
             command=lambda: os.startfile(self.download_output_dir)
         )
         open_dl_btn.pack(side="left")
+
+    def _build_capcut_tab(self):
+        """Tab 3: CapCut Live Editor Hook, Export Interceptor & Remote GPU Render Farm."""
+        container = ctk.CTkFrame(self.tab_capcut, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=8, pady=4)
+        container.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        # ----------------------------------------------------
+        # LEFT COLUMN: Real-Time Export Interceptor (Watchdog Hook)
+        # ----------------------------------------------------
+        left_col = ctk.CTkScrollableFrame(container, corner_radius=10)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=2)
+
+        # Card 1 Title
+        ctk.CTkLabel(
+            left_col,
+            text="🎥 1. Live CapCut Export Interceptor (Watchdog)",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#93c5fd"
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        info_lbl = ctk.CTkLabel(
+            left_col,
+            text="Edit your video inside CapCut with all animations and effects.\n"
+                 "When you click 'Export' in CapCut, this hook automatically catches\n"
+                 "the new video file and offloads GPU NVENC rendering to Computer B!",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8",
+            justify="left"
+        )
+        info_lbl.pack(anchor="w", padx=12, pady=(0, 10))
+
+        # Watch Folder Setup
+        ctk.CTkLabel(
+            left_col,
+            text="📂 CapCut Export Destination (Watch Folder):",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", padx=12, pady=(4, 2))
+
+        folder_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        folder_row.pack(fill="x", padx=12, pady=(0, 8))
+
+        self.capcut_watch_entry = ctk.CTkEntry(folder_row, font=ctk.CTkFont(size=11))
+        self.capcut_watch_entry.insert(0, self.capcut_watch_dir)
+        self.capcut_watch_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        browse_watch_btn = ctk.CTkButton(
+            folder_row,
+            text="Browse",
+            width=70,
+            command=self._handle_browse_capcut_watch
+        )
+        browse_watch_btn.pack(side="left", padx=(0, 4))
+
+        open_watch_btn = ctk.CTkButton(
+            folder_row,
+            text="Open",
+            width=60,
+            fg_color="#334155",
+            hover_color="#1e293b",
+            command=lambda: os.startfile(self.capcut_watch_entry.get().strip() or self.capcut_watch_dir)
+        )
+        open_watch_btn.pack(side="left")
+
+        # Remote Render Profile Selector
+        ctk.CTkLabel(
+            left_col,
+            text="⚙️ Target Remote GPU Remastering Profile (Computer B):",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", padx=12, pady=(8, 2))
+
+        self.capcut_profile_combo = ctk.CTkComboBox(
+            left_col,
+            values=[
+                "Ultra Master NVENC (1080p, 6000k, GPU)",
+                "Cinema 4K High-Bitrate (3840x2160, 10000k)",
+                "Standard 1080p Fast (1920x1080, 3000k)",
+                "Smooth 60 FPS Interpolation (Original Res)",
+                "Fast Web / Social Media (720p, 1800k)"
+            ],
+            width=360
+        )
+        self.capcut_profile_combo.set("Ultra Master NVENC (1080p, 6000k, GPU)")
+        self.capcut_profile_combo.pack(anchor="w", padx=12, pady=(0, 10))
+
+        # Big Toggle Button: Enable / Disable Watchdog Hook
+        self.capcut_toggle_btn = ctk.CTkButton(
+            left_col,
+            text="🟢 Activate Live Export Interceptor",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#10b981",
+            hover_color="#059669",
+            height=36,
+            command=self._handle_toggle_capcut_watch
+        )
+        self.capcut_toggle_btn.pack(fill="x", padx=12, pady=(6, 12))
+
+        # Intercept Status & Stats Card
+        stats_frame = ctk.CTkFrame(left_col, corner_radius=8, fg_color=("#1e293b", "#0f172a"))
+        stats_frame.pack(fill="x", padx=12, pady=(0, 12))
+
+        self.capcut_watch_status_lbl = ctk.CTkLabel(
+            stats_frame,
+            text="🔴 Interceptor: PAUSED (Click 'Activate' to start auto-detecting exports)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#f87171"
+        )
+        self.capcut_watch_status_lbl.pack(anchor="w", padx=10, pady=(8, 4))
+
+        self.capcut_intercept_count_lbl = ctk.CTkLabel(
+            stats_frame,
+            text="Total Exports Intercepted: 0 | Last Offloaded: None",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
+        )
+        self.capcut_intercept_count_lbl.pack(anchor="w", padx=10, pady=(0, 8))
+
+
+        # ----------------------------------------------------
+        # RIGHT COLUMN: CapCut Local Drafts Explorer & Timeline Offload
+        # ----------------------------------------------------
+        right_col = ctk.CTkScrollableFrame(container, corner_radius=10)
+        right_col.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=2)
+
+        # Card 2 Title
+        ctk.CTkLabel(
+            right_col,
+            text="📋 2. CapCut Local Draft Projects Explorer",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#93c5fd"
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        draft_desc = ctk.CTkLabel(
+            right_col,
+            text="Directly inspects active project timelines stored inside CapCut's AppData.\n"
+                 "Select any project draft to package and render its clips on Computer B!",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8",
+            justify="left"
+        )
+        draft_desc.pack(anchor="w", padx=12, pady=(0, 10))
+
+        # Project Selector Dropdown + Refresh Button
+        sel_row = ctk.CTkFrame(right_col, fg_color="transparent")
+        sel_row.pack(fill="x", padx=12, pady=(0, 8))
+
+        self.capcut_draft_combo = ctk.CTkComboBox(
+            sel_row,
+            values=["Scanning CapCut Drafts..."],
+            width=260,
+            command=self._handle_select_capcut_draft
+        )
+        self.capcut_draft_combo.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        refresh_draft_btn = ctk.CTkButton(
+            sel_row,
+            text="🔄 Refresh",
+            width=80,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            command=self._handle_refresh_capcut_drafts
+        )
+        refresh_draft_btn.pack(side="left")
+
+        # Project Detail Card
+        self.draft_card = ctk.CTkFrame(right_col, corner_radius=8, fg_color=("#1e293b", "#0f172a"))
+        self.draft_card.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.draft_info_title = ctk.CTkLabel(
+            self.draft_card,
+            text="Project Name: --",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.draft_info_title.pack(anchor="w", padx=10, pady=(8, 2))
+
+        self.draft_info_details = ctk.CTkLabel(
+            self.draft_card,
+            text="Duration: -- | FPS: -- | Video Assets: --\nLast Modified: --",
+            font=ctk.CTkFont(size=11),
+            text_color="#cbd5e1",
+            justify="left"
+        )
+        self.draft_info_details.pack(anchor="w", padx=10, pady=(0, 8))
+
+        # Action Buttons for Draft
+        draft_btn_row = ctk.CTkFrame(right_col, fg_color="transparent")
+        draft_btn_row.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.offload_draft_btn = ctk.CTkButton(
+            draft_btn_row,
+            text="🚀 Offload Draft Clips to Computer B",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            height=32,
+            command=self._handle_offload_capcut_draft
+        )
+        self.offload_draft_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        open_draft_dir_btn = ctk.CTkButton(
+            draft_btn_row,
+            text="📁 Open Folder",
+            width=100,
+            height=32,
+            fg_color="#334155",
+            hover_color="#1e293b",
+            command=self._handle_open_capcut_draft_folder
+        )
+        open_draft_dir_btn.pack(side="left")
+
+        # Dedicated CapCut Hook Log Box
+        ctk.CTkLabel(
+            right_col,
+            text="📡 Live CapCut Hook & Interceptor Stream:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", padx=12, pady=(8, 2))
+
+        self.capcut_log_box = ctk.CTkTextbox(
+            right_col,
+            height=130,
+            font=ctk.CTkFont(family="Consolas", size=10),
+            fg_color=("#111827", "#030712"),
+            text_color="#a7f3d0"
+        )
+        self.capcut_log_box.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.capcut_log_box.insert("end", "[CAPCUT SYSTEM] CapCut Live Editor Hook & Remote Render Farm initialized.\n")
+        self.capcut_log_box.configure(state="disabled")
+
+        # Initial automatic scan of drafts
+        self.after(500, self._handle_refresh_capcut_drafts)
+
+    def _log_capcut(self, text: str):
+        """Logs an event to both the CapCut log box and the main console."""
+        timestamp = time.strftime("%H:%M:%S")
+        formatted = f"[{timestamp}] {text}\n"
+        try:
+            self.capcut_log_box.configure(state="normal")
+            self.capcut_log_box.insert("end", formatted)
+            self.capcut_log_box.see("end")
+            self.capcut_log_box.configure(state="disabled")
+        except Exception:
+            pass
+        self.log(f"[CAPCUT HOOK] {text}")
+
+    def _scan_capcut_drafts(self) -> List[Dict[str, Any]]:
+        """Scans local CapCut directory for active project drafts."""
+        if not os.path.exists(self.capcut_drafts_dir):
+            return []
+
+        results = []
+        try:
+            for item in os.listdir(self.capcut_drafts_dir):
+                if item.startswith('.'):
+                    continue
+                p = os.path.join(self.capcut_drafts_dir, item)
+                if not os.path.isdir(p):
+                    continue
+
+                info = {
+                    'id': item,
+                    'path': p,
+                    'name': item,
+                    'fps': 30.0,
+                    'duration_sec': 0.0,
+                    'videos': [],
+                    'video_count': 0,
+                    'modified': time.strftime('%Y-%m-%d %H:%M', time.localtime(os.path.getmtime(p))),
+                    'mtime': os.path.getmtime(p)
+                }
+
+                content_json = os.path.join(p, 'draft_content.json')
+                if os.path.exists(content_json):
+                    try:
+                        import json
+                        with open(content_json, 'r', encoding='utf-8', errors='ignore') as f:
+                            cdata = json.load(f)
+                            info['fps'] = cdata.get('fps', 30.0)
+                            dur_us = cdata.get('duration', 0)
+                            info['duration_sec'] = round(dur_us / 1000000.0, 2)
+                            mats = cdata.get('materials', {})
+                            vlist = mats.get('videos', [])
+                            vpaths = []
+                            for v in vlist:
+                                if isinstance(v, dict) and v.get('path'):
+                                    vpaths.append(v['path'])
+                            info['videos'] = vpaths
+                            info['video_count'] = len(vpaths)
+                            if cdata.get('name'):
+                                info['name'] = cdata['name']
+                    except Exception:
+                        pass
+
+                results.append(info)
+        except Exception as e:
+            self.log(f"[ERROR] Error scanning CapCut drafts: {e}")
+
+        # Sort newest modified first
+        results.sort(key=lambda x: x.get('mtime', 0), reverse=True)
+        return results
+
+    def _handle_refresh_capcut_drafts(self):
+        """Refreshes the CapCut draft projects dropdown."""
+        self.capcut_drafts_data = self._scan_capcut_drafts()
+        if self.capcut_drafts_data:
+            vals = [f"{d['id']} - {d['name']} ({d['duration_sec']}s, {d['video_count']} clips)" for d in self.capcut_drafts_data]
+            self.capcut_draft_combo.configure(values=vals)
+            self.capcut_draft_combo.set(vals[0])
+            self._handle_select_capcut_draft(vals[0])
+            self._log_capcut(f"Discovered {len(self.capcut_drafts_data)} CapCut project drafts in AppData.")
+        else:
+            self.capcut_draft_combo.configure(values=["No CapCut drafts found"])
+            self.capcut_draft_combo.set("No CapCut drafts found")
+            self.draft_info_title.configure(text="No CapCut drafts detected")
+            self.draft_info_details.configure(text="Make sure CapCut is installed on this PC.")
+
+    def _handle_select_capcut_draft(self, choice=None):
+        """Updates draft details display when user selects a project."""
+        if not self.capcut_drafts_data:
+            return
+        selected_text = self.capcut_draft_combo.get()
+        target = None
+        for d in self.capcut_drafts_data:
+            if d['id'] in selected_text:
+                target = d
+                break
+        if not target and self.capcut_drafts_data:
+            target = self.capcut_drafts_data[0]
+
+        if target:
+            self.draft_info_title.configure(text=f"Project: {target['name']} (ID: {target['id']})")
+            clip_names = [os.path.basename(v) for v in target['videos'][:3]]
+            clip_summary = ", ".join(clip_names) + ("..." if len(target['videos']) > 3 else "")
+            details_str = (
+                f"Duration: {target['duration_sec']}s | FPS: {target['fps']} | Total Clips: {target['video_count']}\n"
+                f"Last Modified: {target['modified']}\n"
+                f"Clips: {clip_summary or 'No external video files'}"
+            )
+            self.draft_info_details.configure(text=details_str)
+
+    def _handle_open_capcut_draft_folder(self):
+        """Opens the selected CapCut draft folder in Explorer."""
+        selected_text = self.capcut_draft_combo.get()
+        for d in self.capcut_drafts_data:
+            if d['id'] in selected_text:
+                if os.path.exists(d['path']):
+                    os.startfile(d['path'])
+                    self._log_capcut(f"Opened draft folder: {d['path']}")
+                return
+
+    def _handle_offload_capcut_draft(self):
+        """Offloads referenced clips of the selected CapCut project to Computer B."""
+        if not self.capcut_drafts_data:
+            messagebox.showwarning("No Project", "No CapCut draft projects found.")
+            return
+
+        selected_text = self.capcut_draft_combo.get()
+        target = None
+        for d in self.capcut_drafts_data:
+            if d['id'] in selected_text:
+                target = d
+                break
+        if not target:
+            messagebox.showwarning("Select Project", "Please select a valid CapCut project draft.")
+            return
+
+        # Find existing video files referenced by this draft
+        valid_clips = []
+        for v in target['videos']:
+            # Normalize path slashes
+            norm_p = os.path.normpath(v)
+            if os.path.exists(norm_p):
+                valid_clips.append(norm_p)
+
+        if not valid_clips:
+            messagebox.showerror(
+                "Source Assets Missing",
+                f"The video clips referenced by draft '{target['id']}' could not be located on disk.\n"
+                "Please make sure the source video files have not been moved or deleted."
+            )
+            return
+
+        # Deduplicate while preserving order
+        unique_clips = []
+        for c in valid_clips:
+            if c not in unique_clips:
+                unique_clips.append(c)
+
+        self._log_capcut(f"🚀 Loaded {len(unique_clips)} video clips from draft '{target['id']}'. Offloading to Computer B...")
+
+        # Apply profile configuration
+        profile = self.capcut_profile_combo.get()
+        if "4K" in profile:
+            self.res_combo.set("3840x2160")
+            self.bitrate_combo.set("8000k")
+        elif "1080p, 6000k" in profile:
+            self.res_combo.set("1920x1080")
+            self.bitrate_combo.set("6000k")
+        elif "60 FPS" in profile:
+            self.fps_combo.set("60 fps")
+        elif "720p" in profile:
+            self.res_combo.set("1280x720")
+            self.bitrate_combo.set("1500k")
+
+        # Set selected files and switch to main offload view
+        self.selected_video_files = unique_clips
+        self.selection_mode = "multi" if len(unique_clips) > 1 else "single"
+        self._update_files_view()
+
+        # Switch tab and trigger offload
+        self.tabview.set("🎬 Multi-Part Video Combiner & Offload")
+        self._handle_start_offload()
+
+    def _handle_browse_capcut_watch(self):
+        """Browse dialog for CapCut Export Watch Folder."""
+        folder = filedialog.askdirectory(title="Select CapCut Export Folder to Monitor")
+        if folder:
+            self.capcut_watch_entry.delete(0, "end")
+            self.capcut_watch_entry.insert(0, folder)
+            self.capcut_watch_dir = folder
+            self._log_capcut(f"Watch folder updated to: {folder}")
+
+    def _handle_toggle_capcut_watch(self):
+        """Activates or deactivates the live CapCut export interceptor watchdog."""
+        if self.capcut_watch_active:
+            # Turn OFF
+            self.capcut_watch_active = False
+            self.capcut_toggle_btn.configure(
+                text="🟢 Activate Live Export Interceptor",
+                fg_color="#10b981",
+                hover_color="#059669"
+            )
+            self.capcut_watch_status_lbl.configure(
+                text="🔴 Interceptor: PAUSED (Click 'Activate' to start auto-detecting exports)",
+                text_color="#f87171"
+            )
+            self._log_capcut("Live Export Interceptor PAUSED.")
+        else:
+            # Turn ON
+            watch_dir = self.capcut_watch_entry.get().strip()
+            if not watch_dir:
+                messagebox.showerror("Error", "Please specify a valid folder path to watch.")
+                return
+            os.makedirs(watch_dir, exist_ok=True)
+            self.capcut_watch_dir = watch_dir
+
+            # Snapshot current files so we only intercept newly exported files
+            try:
+                self._known_capcut_files = set(os.listdir(watch_dir))
+            except Exception:
+                self._known_capcut_files = set()
+
+            self.capcut_watch_active = True
+            self.capcut_toggle_btn.configure(
+                text="🛑 Stop Live Interceptor",
+                fg_color="#dc2626",
+                hover_color="#b91c1c"
+            )
+            self.capcut_watch_status_lbl.configure(
+                text=f"🟢 Interceptor: ACTIVE & LISTENING\nMonitoring: {watch_dir}",
+                text_color="#4ade80"
+            )
+            self._log_capcut(f"🟢 Live Interceptor ACTIVE on folder: {watch_dir}")
+            self._log_capcut("💡 Edit in CapCut, click 'Export' into this folder. Computer B will automatically render it!")
+
+            # Launch watchdog thread
+            self.capcut_watch_thread = threading.Thread(target=self._capcut_watch_loop, daemon=True)
+            self.capcut_watch_thread.start()
+
+    def _capcut_watch_loop(self):
+        """Background thread monitoring the watch folder for new CapCut exports."""
+        watch_dir = self.capcut_watch_dir
+        while self.capcut_watch_active:
+            time.sleep(1.5)
+            if not os.path.exists(watch_dir):
+                continue
+
+            try:
+                current_files = os.listdir(watch_dir)
+            except Exception:
+                continue
+
+            for fname in current_files:
+                if not self.capcut_watch_active:
+                    break
+
+                if fname in self._known_capcut_files:
+                    continue
+
+                lower_name = fname.lower()
+                if not lower_name.endswith(('.mp4', '.mov', '.mkv', '.avi')):
+                    continue
+
+                fpath = os.path.join(watch_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+
+                # Wait for file write to complete (size stability check)
+                try:
+                    s1 = os.path.getsize(fpath)
+                    time.sleep(1.5)
+                    s2 = os.path.getsize(fpath)
+                    if s1 != s2 or s1 == 0:
+                        continue  # Still writing, check next cycle
+                except Exception:
+                    continue
+
+                # New finished export detected!
+                self._known_capcut_files.add(fname)
+                self.capcut_intercept_count += 1
+
+                self.run_on_ui(lambda f=fname: self.capcut_intercept_count_lbl.configure(
+                    text=f"Total Exports Intercepted: {self.capcut_intercept_count} | Last: {f}"
+                ))
+                self.run_on_ui(lambda f=fname, sz=s2: self._log_capcut(
+                    f"🔔 INTERCEPTED new CapCut Export: '{f}' ({format_bytes(sz)})!"
+                ))
+                self.run_on_ui(lambda f=fname: self._log_capcut(
+                    f"🚀 Auto-offloading '{f}' to Computer B for GPU NVENC Remastering..."
+                ))
+
+                # Apply profile
+                profile = self.capcut_profile_combo.get()
+                if "4K" in profile:
+                    self.run_on_ui(lambda: self.res_combo.set("3840x2160"))
+                    self.run_on_ui(lambda: self.bitrate_combo.set("8000k"))
+                elif "1080p, 6000k" in profile:
+                    self.run_on_ui(lambda: self.res_combo.set("1920x1080"))
+                    self.run_on_ui(lambda: self.bitrate_combo.set("6000k"))
+
+                self.selected_video_files = [fpath]
+                self.selection_mode = "single"
+                self.run_on_ui(self._update_files_view)
+                self.run_on_ui(lambda: self.tabview.set("🎬 Multi-Part Video Combiner & Offload"))
+                self.run_on_ui(self._handle_start_offload)
+                break
 
     def _build_log_terminal(self):
         """Bottom Real-Time Log Terminal Widget."""

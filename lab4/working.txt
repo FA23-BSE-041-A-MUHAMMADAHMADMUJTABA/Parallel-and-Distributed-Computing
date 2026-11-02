@@ -49,8 +49,9 @@ PART 6: MULTI-PART VIDEO CONCATENATION & STITCHING PIPELINE
 
 PART 7: PEER-TO-PEER LAN FILE SHARING HUB & SCIENTIFIC WORKLOADS
   17. Peer-to-Peer LAN File Sharing Hub (Tab 2: Direct Offline Sharing)
-  18. Complex Project Python Script Offloading (`sample_project_task.py`)
-  19. CUDA / Parallel Matrix Tensor Compute Workloads
+  18. CapCut Live Editor Hook & Remote GPU Render Farm (Tab 3: Real-Time Watchdog & Timeline Offload)
+  19. Complex Project Python Script Offloading (`sample_project_task.py`)
+  20. CUDA / Parallel Matrix Tensor Compute Workloads
 
 PART 8: BENCHMARKING & PUBLICATION VISUALIZATIONS
   20. `client/benchmark.py` (Comparative Local vs Remote Benchmark Suite)
@@ -593,7 +594,37 @@ karne k liye dedicated tab provide kiya gaya hai:
      Windows Explorer mai downloads directory open karta hai.
 
 
-18. COMPLEX PROJECT PYTHON SCRIPT OFFLOADING (`sample_project_task.py`)
+18. CAPCUT LIVE EDITOR HOOK & REMOTE GPU RENDER FARM (TAB 3)
+--------------------------------------------------------------------------------
+CapCut PC jaise consumer video editors k sath seamless distributed rendering integrate karne
+k liye dedicated Tab 3 create kiya gaya hai:
+
+- Deep Architectural Analysis:
+  CapCut closed-source desktop application hai jisme koi direct public network render API
+  nahi hoti. Lekin do technical methods k zariye CapCut ka rendering load Computer B par
+  offload kiya ja sakta hai:
+
+  1. Live Watchdog Export Interceptor (Auto-Render Hook):
+     - CapCut export folder (e.g. `Videos/CapCut` ya custom watch directory) par real-time
+       filesystem monitoring daemon listen karta hai.
+     - User CapCut mai animations, effects, aur color grading k sath edit karta hai.
+     - Jaise hi user CapCut mai "Export" par click karta hai, hamara background daemon
+       write-completion (file size stability) verify kar k file ko foran intercept karta hai.
+     - File ko automatically Computer B (192.168.1.20) par stream kiya jata hai jahan
+       Computer B ka powerful GPU NVENC hardware encoder Ultra Master 1080p60 ya Cinema 4K
+       profile k sath heavy rendering execute karta hai.
+     - Finished master video automatically Computer A k `client_downloads/` mai save ho jati hai.
+
+  2. CapCut Local Drafts Explorer (Direct Timeline Offloader):
+     - CapCut projects `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\` mai
+       `draft_content.json` k tor par save hotay hain.
+     - Hamara client app local machine par mojood tamam active drafts (e.g. `1102`, `0315`, `0314`)
+       ko auto-discover karta hai aur unki duration, FPS aur referenced video clips extract karta hai.
+     - "🚀 Offload Draft Clips to Computer B" par click karne par project k referenced clips
+       Computer B k high-performance GPU farm par render k liye offload ho jatay hain.
+
+
+19. COMPLEX PROJECT PYTHON SCRIPT OFFLOADING (`sample_project_task.py`)
 --------------------------------------------------------------------------------
 Aap kisi bhi scientific ya heavy simulation Python script ko Server par offload kar sakte hain:
 - Workload Stages (`sample_project_task.py`):
