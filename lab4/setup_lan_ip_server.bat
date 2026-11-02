@@ -26,8 +26,9 @@ if %errorlevel% equ 0 (
     echo [!] Warning: Failed to set IP on 'Ethernet'. Check adapter name in ncpa.cpl.
 )
 
-echo [*] Opening Windows Firewall for Port 5000 and Ping...
+echo [*] Opening Windows Firewall for Port 5000, Auto-Discovery UDP 5005 and Ping...
 netsh advfirewall firewall add rule name="CSC334-Lab4-TCP5000" dir=in action=allow protocol=TCP localport=5000 >nul 2>&1
+netsh advfirewall firewall add rule name="CSC334-Lab4-UDP5005" dir=in action=allow protocol=UDP localport=5005 >nul 2>&1
 netsh advfirewall firewall add rule name="CSC334-Lab4-ICMP" dir=in action=allow protocol=ICMPv4 >nul 2>&1
 echo [OK] Firewall rules configured!
 

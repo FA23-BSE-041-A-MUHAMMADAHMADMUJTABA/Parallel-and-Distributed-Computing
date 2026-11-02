@@ -18,6 +18,10 @@ netsh advfirewall firewall show rule name="CSC334-Lab4-TCP5000" >nul 2>&1
 if errorlevel 1 (
     netsh advfirewall firewall add rule name="CSC334-Lab4-TCP5000" dir=in action=allow protocol=TCP localport=5000 >nul 2>&1
 )
+netsh advfirewall firewall show rule name="CSC334-Lab4-UDP5005" >nul 2>&1
+if errorlevel 1 (
+    netsh advfirewall firewall add rule name="CSC334-Lab4-UDP5005" dir=in action=allow protocol=UDP localport=5005 >nul 2>&1
+)
 
 ipconfig | findstr /c:"169.254." >nul 2>&1
 if not errorlevel 1 (

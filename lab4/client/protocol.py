@@ -46,6 +46,11 @@ CHUNK_SIZE = 64 * 1024  # 64 KB chunk size for network transfers
 SOCKET_TIMEOUT = 15.0   # 15 seconds socket read timeout
 PROTOCOL_VERSION = "2.0.0"
 
+# Auto-Discovery Protocol Constants (Zero-Config UDP Broadcast)
+DISCOVERY_PORT = 5005
+DISCOVERY_MAGIC = b"DC_DISCOVERY_PING"
+DISCOVERY_RESP = b"DC_DISCOVERY_PONG"
+
 
 def send_packet(sock: socket.socket, msg_type: bytes, payload: bytes = b"") -> None:
     """

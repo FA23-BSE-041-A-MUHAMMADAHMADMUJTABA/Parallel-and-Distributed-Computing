@@ -17,7 +17,8 @@ from typing import Dict, Any, Optional, List, Callable
 
 from protocol import (
     MsgType, send_packet, send_json, read_packet, read_json,
-    CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION
+    CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION,
+    DISCOVERY_PORT, DISCOVERY_MAGIC, DISCOVERY_RESP
 )
 from utils import compute_sha256, format_bytes, detect_system_capabilities
 from task_queue import TaskQueueManager, TaskItem, TaskStatus
@@ -113,9 +114,13 @@ class RemoteWorkerServer:
             pass
 
         # Remind about Firewall
-        self.log(f"[*] Ensure Windows Firewall allows inbound TCP Port {self.port}")
+        self.log(f"[*] Ensure Windows Firewall allows inbound TCP Port {self.port} & UDP Port {DISCOVERY_PORT}")
         self.log("=" * 70)
         self.log("[*] Worker daemon listening for incoming client offload tasks...")
+
+        # Start background UDP auto-discovery responder & beacon
+        discovery_thread = threading.Thread(target=self._discovery_responder_loop, daemon=True)
+        discovery_thread.start()
 
         # Start background task queue execution thread
         worker_thread = threading.Thread(target=self._queue_worker_loop, daemon=True)
@@ -614,3 +619,66 @@ class RemoteWorkerServer:
             task = self.queue_manager.get_task(timeout=1.0)
             if task:
                 self.queue_manager.task_done()
+
+    def _discovery_responder_loop(self) -> None:
+        """
+        Listens on UDP DISCOVERY_PORT for discovery pings from client laptops,
+        and broadcasts periodic beacons to announce server presence on all LAN adapters.
+        """
+        import json
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            udp_sock.bind(("", DISCOVERY_PORT))
+            udp_sock.settimeout(1.0)
+            self.log(f"[*] Auto-Discovery service active on UDP port {DISCOVERY_PORT}")
+        except Exception as e:
+            self.log(f"[!] Warning: UDP Auto-Discovery port {DISCOVERY_PORT} unavailable: {e}")
+            return
+
+        last_beacon_time = 0.0
+
+        while not self._shutdown_event.is_set():
+            now = time.time()
+            # Periodically broadcast server beacon every 2.5 seconds
+            if now - last_beacon_time >= 2.5:
+                last_beacon_time = now
+                beacon_data = json.dumps({
+                    "magic": "DC_DISCOVERY_PONG",
+                    "hostname": self.sys_info.get("hostname", "Server"),
+                    "tcp_port": self.port,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "cpu_count": self.sys_info.get("cpu_count", 4),
+                    "nvenc_status": self.sys_info.get("nvenc_status", "N/A")
+                }).encode("utf-8")
+
+                # Send on global and adapter subnet broadcasts
+                for b_ip in ["255.255.255.255", "127.0.0.1", "192.168.1.255", "192.168.43.255", "169.254.255.255"]:
+                    try:
+                        udp_sock.sendto(beacon_data, (b_ip, DISCOVERY_PORT))
+                    except Exception:
+                        pass
+
+            try:
+                data, client_addr = udp_sock.recvfrom(2048)
+                if data and DISCOVERY_MAGIC in data:
+                    resp_data = json.dumps({
+                        "magic": "DC_DISCOVERY_PONG",
+                        "hostname": self.sys_info.get("hostname", "Server"),
+                        "tcp_port": self.port,
+                        "protocol_version": PROTOCOL_VERSION,
+                        "cpu_count": self.sys_info.get("cpu_count", 4),
+                        "nvenc_status": self.sys_info.get("nvenc_status", "N/A")
+                    }).encode("utf-8")
+                    udp_sock.sendto(resp_data, client_addr)
+                    self.log(f"[AUTO-DETECT] Answered discovery probe from {client_addr[0]}:{client_addr[1]}")
+            except socket.timeout:
+                continue
+            except Exception:
+                continue
+
+        try:
+            udp_sock.close()
+        except Exception:
+            pass

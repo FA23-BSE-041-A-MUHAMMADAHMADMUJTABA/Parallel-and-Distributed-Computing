@@ -83,6 +83,10 @@ class TaskOffloaderApp(ctk.CTk):
         self.log("[SYSTEM] Distributed Task Offloading Client initialized (Computer A).")
         self.log(f"[SYSTEM] Default Target: {DEFAULT_HOST}:{DEFAULT_PORT}. Click '⚡ Handshake & Ping' to connect to Computer B.")
         self.log("[NEW] Video Concat Feature: Select an Entire Folder of video parts or Multi-Select files to combine and render!")
+        self.log("[TIP] Click '🔍 Auto-Detect IP' to automatically discover Server Node on LAN wire or Wi-Fi!")
+
+        # Auto-detect Server IP in background on startup
+        self.after(400, lambda: threading.Thread(target=lambda: self._handle_auto_detect_server(silent=True), daemon=True).start())
 
 
     # ==========================================
@@ -160,22 +164,34 @@ class TaskOffloaderApp(ctk.CTk):
         net_row = ctk.CTkFrame(left_col, fg_color="transparent")
         net_row.pack(fill="x", padx=14, pady=2)
 
-        self.ip_entry = ctk.CTkEntry(net_row, placeholder_text="Server IP (e.g. 192.168.1.20)", width=170)
+        self.ip_entry = ctk.CTkEntry(net_row, placeholder_text="Server IP (e.g. 192.168.1.20)", width=220)
         self.ip_entry.insert(0, DEFAULT_HOST)
-        self.ip_entry.pack(side="left", padx=(0, 6))
+        self.ip_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        self.port_entry = ctk.CTkEntry(net_row, placeholder_text="Port", width=65)
+        self.port_entry = ctk.CTkEntry(net_row, placeholder_text="Port", width=75)
         self.port_entry.insert(0, str(DEFAULT_PORT))
-        self.port_entry.pack(side="left", padx=(0, 6))
+        self.port_entry.pack(side="left", padx=(0, 0))
+
+        btn_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        btn_row.pack(fill="x", padx=14, pady=(4, 2))
+
+        self.detect_btn = ctk.CTkButton(
+            btn_row,
+            text="🔍 Auto-Detect IP",
+            fg_color="#059669",
+            hover_color="#047857",
+            command=self._handle_auto_detect_server
+        )
+        self.detect_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
         self.ping_btn = ctk.CTkButton(
-            net_row,
+            btn_row,
             text="⚡ Handshake & Ping",
             fg_color="#2563eb",
             hover_color="#1d4ed8",
             command=self._handle_handshake_and_ping
         )
-        self.ping_btn.pack(side="left", fill="x", expand=True)
+        self.ping_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         # Server Node Status Card
         self.worker_card = ctk.CTkFrame(left_col, fg_color=("#374151", "#1e293b"), corner_radius=8)
@@ -944,8 +960,59 @@ class TaskOffloaderApp(ctk.CTk):
     # ==========================================
     # EVENT HANDLERS
     # ==========================================
+    def _handle_auto_detect_server(self, silent: bool = False):
+        """Auto-detects Server Node on LAN / Wi-Fi / Direct wire and populates IP."""
+        def task():
+            if not silent:
+                self.log("\n[DISCOVERY] Scanning LAN, Wi-Fi & Direct Wire for active Server Node...")
+
+            discovered = OffloadingClient.discover_server(timeout=2.0)
+            if discovered:
+                srv_ip = discovered["ip"]
+                srv_port = discovered["port"]
+                srv_host = discovered.get("hostname", "Server Node")
+                srv_method = discovered.get("method", "Network Probe")
+
+                def _apply():
+                    self.ip_entry.delete(0, "end")
+                    self.ip_entry.insert(0, srv_ip)
+                    self.port_entry.delete(0, "end")
+                    self.port_entry.insert(0, str(srv_port))
+                    self.worker_status_lbl.configure(
+                        text=f"🟡 Discovered: {srv_host} ({srv_ip}:{srv_port})",
+                        text_color="#facc15"
+                    )
+                    self.worker_specs_lbl.configure(
+                        text=f"Auto-detected via {srv_method}! Click '⚡ Handshake & Ping' to connect."
+                    )
+                self.run_on_ui(_apply)
+                self.log(f"✅ [AUTO-DETECT SUCCESS] Discovered Server at {srv_ip}:{srv_port} ({srv_host}) via {srv_method}!")
+                if not silent:
+                    self.run_on_ui(lambda: messagebox.showinfo(
+                        "Server Auto-Detected!",
+                        f"Found active Server Node!\n\n"
+                        f"• Hostname  : {srv_host}\n"
+                        f"• IP Address: {srv_ip}\n"
+                        f"• Port      : {srv_port}\n"
+                        f"• Discovery : {srv_method}\n\n"
+                        f"IP has been set automatically! Click '⚡ Handshake & Ping' to connect."
+                    ))
+            else:
+                if not silent:
+                    self.log("[!] [DISCOVERY] No active Server Node responded to auto-detection.")
+                    self.run_on_ui(lambda: messagebox.showwarning(
+                        "Server Not Detected",
+                        "Could not auto-detect Server Node.\n\n"
+                        "Check:\n"
+                        "1. Is Server GUI or Daemon running on Computer B?\n"
+                        "2. Is Computer B connected with LAN cable or Wi-Fi?\n"
+                        "3. Or enter Computer B's IP address manually."
+                    ))
+
+        threading.Thread(target=task, daemon=True).start()
+
     def _handle_handshake_and_ping(self):
-        """Task 1: Handshake protocol and latency ping check with prominent alerts."""
+        """Task 1: Handshake protocol and latency ping check with automatic detection fallback."""
         host = self.ip_entry.get().strip()
         try:
             port = int(self.port_entry.get().strip())
@@ -954,16 +1021,49 @@ class TaskOffloaderApp(ctk.CTk):
             return
 
         def task():
-            self.log(f"\n[CONNECTING] Contacting Remote Server (Computer B) at {host}:{port}...")
-            try:
-                self.client = OffloadingClient(host=host, port=port)
-                info = self.client.perform_handshake()
-                latency = self.client.measure_ping_latency(num_samples=3)
+            target_host = host
+            target_port = port
+            self.log(f"\n[CONNECTING] Contacting Remote Server at {target_host}:{target_port}...")
 
+            info = None
+            latency = 0.0
+
+            try:
+                try:
+                    self.client = OffloadingClient(host=target_host, port=target_port)
+                    info = self.client.perform_handshake()
+                    latency = self.client.measure_ping_latency(num_samples=3)
+                except Exception as initial_err:
+                    # Intelligent Auto-Detection Fallback: Try scanning the network!
+                    self.log(f"[!] Direct connection to {target_host}:{target_port} failed ({initial_err}).")
+                    self.log("🔍 [AUTO-DETECT] Probing network for active Server Node...")
+                    try:
+                        discovered = OffloadingClient.discover_server(timeout=1.5)
+                        if discovered and (discovered["ip"] != target_host or discovered["port"] != target_port):
+                            target_host = discovered["ip"]
+                            target_port = discovered["port"]
+                            self.log(f"✅ [AUTO-DETECT] Found Server Node at {target_host}:{target_port} ({discovered.get('hostname')})! Retrying handshake...")
+
+                            def _update_fields():
+                                self.ip_entry.delete(0, "end")
+                                self.ip_entry.insert(0, target_host)
+                                self.port_entry.delete(0, "end")
+                                self.port_entry.insert(0, str(target_port))
+                            self.run_on_ui(_update_fields)
+
+                            self.client = OffloadingClient(host=target_host, port=target_port)
+                            info = self.client.perform_handshake()
+                            latency = self.client.measure_ping_latency(num_samples=3)
+                        else:
+                            raise initial_err
+                    except Exception:
+                        raise initial_err
+
+                # Connected successfully!
                 hostname = info.get('hostname', 'Remote Server')
                 cpu_count = info.get('cpu_count', 4)
                 gpu_status = info.get('nvenc_status', 'N/A')
-                status_txt = f"Connected to: {hostname} ({host})"
+                status_txt = f"Connected to: {hostname} ({target_host})"
                 specs_txt = f"CPU: {cpu_count} Cores | GPU: {gpu_status[:30]} | Ping RTT: {latency} ms"
 
                 def _update_ui():
@@ -973,7 +1073,7 @@ class TaskOffloaderApp(ctk.CTk):
 
                 self.run_on_ui(_update_ui)
 
-                self.log(f"⚡ [TCP CONNECTED] Socket established with {host}:{port}!")
+                self.log(f"⚡ [TCP CONNECTED] Socket established with {target_host}:{target_port}!")
                 self.log(f"🤝 [HANDSHAKE VERIFIED] Server '{hostname}' running protocol v{info.get('protocol_version')}")
                 self.log(f"⚡ [LATENCY PROBE] Measured Round-Trip Time (RTT): {latency} ms")
                 self.log(f"🚀 [RESOURCES UNLOCKED] {cpu_count} CPU Cores | {gpu_status}")
@@ -983,10 +1083,10 @@ class TaskOffloaderApp(ctk.CTk):
                 msg = (
                     f"🎉 Successfully Connected to Server (Computer B)!\n\n"
                     f"• Node Hostname : {hostname}\n"
-                    f"• Bound Address : {host}:{port}\n"
+                    f"• Bound Address : {target_host}:{target_port}\n"
                     f"• CPU Hardware  : {cpu_count} Processing Cores\n"
                     f"• Acceleration  : {gpu_status}\n"
-                    f"• Ping Latency  : {latency} ms (Fast LAN Wire)\n\n"
+                    f"• Ping Latency  : {latency} ms\n\n"
                     f"Remote resources are active! You can now send video exports for rendering."
                 )
                 self.run_on_ui(lambda: messagebox.showinfo("Connected to Server!", msg))

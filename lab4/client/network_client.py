@@ -17,7 +17,8 @@ from typing import Dict, Any, Tuple, Optional, Callable
 
 from protocol import (
     MsgType, send_packet, send_json, read_packet, read_json,
-    CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION
+    CHUNK_SIZE, SOCKET_TIMEOUT, PROTOCOL_VERSION,
+    DISCOVERY_PORT, DISCOVERY_MAGIC, DISCOVERY_RESP
 )
 from utils import compute_sha256, format_bytes
 
@@ -35,6 +36,136 @@ class OffloadingClient:
         self.sock: Optional[socket.socket] = None
         self.worker_info: Dict[str, Any] = {}
         self.is_connected = False
+
+    @staticmethod
+    def discover_server(timeout: float = 2.0) -> Optional[Dict[str, Any]]:
+        """
+        Auto-detects the Remote Worker Server IP across LAN, Wi-Fi, Direct Wire, and Localhost.
+        Uses dual mechanisms:
+        1. Fast Zero-Config UDP Broadcast Probe & Beacon Listener on DISCOVERY_PORT (5005).
+        2. Rapid TCP port probe fallback across subnets, ARP table, and candidate IPs.
+        """
+        import json
+        import concurrent.futures
+
+        # -------------------------------------------------------------
+        # Mechanism 1: UDP Broadcast Discovery Probe
+        # -------------------------------------------------------------
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            udp_sock.bind(("", 0))
+            udp_sock.settimeout(0.4)
+
+            broadcast_targets = [
+                "255.255.255.255",
+                "127.0.0.1",
+                "192.168.1.255",
+                "192.168.43.255",
+                "169.254.255.255"
+            ]
+            try:
+                from utils import get_all_local_ips
+                for my_ip in get_all_local_ips():
+                    if my_ip != "127.0.0.1" and "." in my_ip:
+                        parts = my_ip.split(".")
+                        broadcast_targets.append(f"{parts[0]}.{parts[1]}.{parts[2]}.255")
+            except Exception:
+                pass
+
+            for target in set(broadcast_targets):
+                try:
+                    udp_sock.sendto(DISCOVERY_MAGIC, (target, DISCOVERY_PORT))
+                except Exception:
+                    pass
+
+            t_end = time.time() + (timeout * 0.6)
+            while time.time() < t_end:
+                try:
+                    data, addr = udp_sock.recvfrom(2048)
+                    if data and (b"DC_DISCOVERY_PONG" in data or b"tcp_port" in data):
+                        resp = json.loads(data.decode("utf-8", errors="ignore"))
+                        srv_ip = addr[0]
+                        if srv_ip == "0.0.0.0":
+                            srv_ip = "127.0.0.1"
+                        return {
+                            "ip": srv_ip,
+                            "port": resp.get("tcp_port", 5000),
+                            "hostname": resp.get("hostname", "Remote Server"),
+                            "cpu_count": resp.get("cpu_count", 4),
+                            "nvenc_status": resp.get("nvenc_status", "N/A"),
+                            "method": "Zero-Config UDP Broadcast"
+                        }
+                except socket.timeout:
+                    continue
+                except Exception:
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                udp_sock.close()
+            except Exception:
+                pass
+
+        # -------------------------------------------------------------
+        # Mechanism 2: Fast Parallel TCP Probe Fallback
+        # -------------------------------------------------------------
+        candidate_ips = ["127.0.0.1", "192.168.1.20", "192.168.1.1"]
+
+        # Parse ARP table for active neighbor devices on LAN / Wi-Fi
+        try:
+            import subprocess, re
+            arp_out = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=2).stdout
+            for match in re.finditer(r"(\d+\.\d+\.\d+\.\d+)", arp_out):
+                ip = match.group(1)
+                if not ip.endswith(".255") and not ip.startswith("224.") and not ip.startswith("239."):
+                    candidate_ips.append(ip)
+        except Exception:
+            pass
+
+        # If on a /24 subnet (like Wi-Fi 192.168.43.x), add candidate subnet IPs
+        try:
+            from utils import get_all_local_ips
+            for my_ip in get_all_local_ips():
+                if my_ip.startswith("192.168.") or my_ip.startswith("10."):
+                    prefix = my_ip.rsplit(".", 1)[0]
+                    for offset in range(1, 40):
+                        candidate_ips.append(f"{prefix}.{offset}")
+        except Exception:
+            pass
+
+        unique_candidates = []
+        for c in candidate_ips:
+            if c not in unique_candidates:
+                unique_candidates.append(c)
+
+        def _test_tcp(ip):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3)
+                res = s.connect_ex((ip, 5000))
+                s.close()
+                if res == 0:
+                    return ip
+            except Exception:
+                pass
+            return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            for ip in executor.map(_test_tcp, unique_candidates):
+                if ip:
+                    return {
+                        "ip": ip,
+                        "port": 5000,
+                        "hostname": "Remote Server Node",
+                        "cpu_count": 4,
+                        "nvenc_status": "Active",
+                        "method": "Fast TCP Port Probe"
+                    }
+
+        return None
 
     def connect(self, timeout: float = 5.0) -> bool:
         """Establishes TCP connection to the remote worker node."""

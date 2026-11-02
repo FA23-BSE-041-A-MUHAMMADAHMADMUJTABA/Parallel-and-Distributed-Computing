@@ -442,7 +442,13 @@ PART 5: CLIENT APPLICATION SUBSYSTEM (COMPUTER A)
   * Tab 2: `📁 LAN File Sharing Hub` (Direct Peer-to-Peer offline file sharing).
 
 - Left Column Sections:
-  * Section 1: Server Connection (IP, Port, "⚡ Handshake & Ping" button, Server status & hardware specs card).
+  * Section 1: Server Connection
+    - IP & Port Entry Fields: Target worker network address.
+    - "🔍 Auto-Detect IP" Button: 1-click network auto-discovery (UDP 5005 broadcast probe + rapid TCP scan) jo
+      server ka exact LAN IP dhoond kar automatically box mai fill kar deta hai.
+    - "⚡ Handshake & Ping" Button: Establishes framed socket connection, verifies protocol version, and probes RTT latency.
+      (Agar entered IP galat ho to automatically background auto-discovery trigger karke sahi IP connect kar leta hai!)
+    - Server Status & Hardware Specs Card: Live online/offline status, host specs, and ping latency badge.
   * Section 2: Video Workload Selection with 4 flexible modes:
     - Mode A: 📁 Browse Entire Folder
     - Mode B: 📑 Select Multiple Files
@@ -478,6 +484,13 @@ PART 5: CLIENT APPLICATION SUBSYSTEM (COMPUTER A)
 13. `client/network_client.py` (OFFLOADING CLIENT & ROBUST EXCEPTIONS)
 --------------------------------------------------------------------------------
 `OffloadingClient` class client-side network lifecycle manage karti hai:
+- `discover_server(timeout=2.0)`:
+  * Zero-Config Dual Auto-Discovery Engine:
+    1. UDP Broadcast Probe: `DISCOVERY_MAGIC` (`b"DC_DISCOVERY_PING"`) global broadcast (`255.255.255.255`)
+       aur tamam active adapter subnets par blast karta hai. Server se `DC_DISCOVERY_PONG` receive hotay hi
+       server ka IP, hostname, aur capabilities extract kar leta hai.
+    2. Fast Parallel TCP Probe Fallback: Agar UDP firewall se blocked ho to localhost, documentation IPs (`192.168.1.20`),
+       ARP table entries, aur active subnet neighbors ko thread pool se probe karke server find karta hai.
 - `connect(timeout=5.0)` & `disconnect()`:
   * Enhanced Exception Mapping:
     - `socket.timeout`: Detailed error mentioning Windows Firewall & Static IP requirements.
@@ -746,7 +759,8 @@ Step 3: Launch Client Node (Computer A)
   -> `python client_gui.py`
 
 Step 4: Connect & Offload Multi-Part Video Workload
-1. "Server IP" field mai Computer B ka IP enter karein: `192.168.1.20`.
+1. "🔍 Auto-Detect IP" button par click karein (ya Computer B ka IP enter karein).
+   -> System khud network scan karke Server B ka IP dhoond kar automatically box mai fill kar dega!
 2. "⚡ Handshake & Ping" button click karein -> Green Connected modal pop-up hoga (RTT ~0.28 ms).
 3. "📂 Browse Folder" click karein aur `client/sample_assets/sample_parts/` select karein (ya multi-files pick karein).
 4. Workload Queue Card mai parts 1, 2, 3 verify karein.
