@@ -16,9 +16,9 @@ echo.
 ipconfig | findstr /c:"169.254." >nul 2>&1
 if not errorlevel 1 (
     echo   ----------------------------------------------------------
-    echo   [!] NOTICE: APIPA (169.254.x.x) detected on Ethernet.
+    echo   [!] NOTICE: APIPA 169.254.x.x detected on Ethernet.
     echo       Direct LAN wire k liye Static IP set karna zaroori hai.
-    echo       Quick Fix: Double-click 'setup_lan_ip_client.bat'
+    echo       Quick Fix: Double-click setup_lan_ip_client.bat
     echo   ----------------------------------------------------------
     echo.
 )
