@@ -102,7 +102,7 @@ lab4/
 │   ├── run_client.bat                  # Standalone Client Launcher for Computer A
 │   ├── sample_assets/                  # Sample Video Assets for Testing
 │   │   └── sample_parts/               # Labeled Multi-Part Clips (part1.mp4, part2.mp4, part3.mp4)
-│   └── client_downloads/               # Received Rendered Outputs (combined_video.mp4 & Server Logs)
+│   └── client_downloads/               # Received Rendered Outputs (combined_video.mp4 & logs.txt)
 │
 ├── server/                              # SERVER WORKER SUBSYSTEM (Computer B)
 │   ├── server_gui.py                   # Modern CustomTkinter Server Monitor & Node Dashboard
@@ -563,10 +563,12 @@ Server par jab multi-part files receive ho jati hain:
 - Instant Playback:
   "▶️ Play Video" button click karne par Python `os.startfile(output_path)` execute karta hai
   jo Windows default Media Player mai instantly video launch kar deta hai.
-- Execution Log Inspection:
-  "📄 View Logs" button click karne par server-side render log file Notepad mai open ho jati hai
-  jisme Server Node Hostname, CPU/GPU Hardware specs, FFmpeg command line, aur encoding milestones
-  complete detail k sath darj hotay hain.
+- Execution Log Inspection & Standardized `logs.txt`:
+  Render complete hone k baad server ka complete execution log client k download folder mai
+  permanently **`client_downloads/logs.txt`** k tor par save hota hai.
+  GUI mai "📄 View Logs" button click karne par ye `logs.txt` file Notepad mai open ho jati hai
+  jisme Server Node Hostname, CPU/GPU Hardware specs, FFmpeg command line, real-time FPS/Speed streams,
+  aur SHA-256 verification metrics complete detail k sath darj hotay hain.
 
 
 ================================================================================
